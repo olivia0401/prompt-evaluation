@@ -1,0 +1,61 @@
+# Example briefs file. Copy to briefs.yml and fill in your own inputs.
+#
+# Required fields per brief:
+#   current_name        (str) — input identifier
+#   business_category   (str) — domain / vertical
+#   product             (str) — product description
+#   differentiators     (str) — what makes it unique
+#   audience            (str) — target audience description
+#   brand_strategy      (str) — positioning / strategy paragraph
+#   personality         (list[str]) — adjectives describing tone
+#   priorities          (list[str]) — semantic field names in importance order
+#   conventions         (int) — number of naming-convention buckets
+#   character_count     (int) — target output length bucket
+#   keywords            (list[str]) — ground-truth keywords (exactly 10)
+#
+# Required ground-truth fields (one per extraction task — used to score outputs):
+#   concept_relevant, position_relevant, emotion_relevant, function_relevant,
+#   benefit_relevant,  category_relevant, feature_relevant, context_relevant
+
+- current_name: Acme Widget Co
+  business_category: Consumer electronics, smart home devices
+  product: >
+    A line of voice-controlled smart home hubs that connect lights, locks
+    and thermostats. Sets up in under five minutes.
+  differentiators: "Faster setup, lower price, no subscription required"
+  conventions: 4
+  audience: >
+    Mid-30s renters in urban apartments who want connected-home convenience
+    without a subscription bill.
+  brand_strategy: >
+    Friendly tech that respects your time. Approachable, low-fuss, with a
+    sense of humour.
+  character_count: 6
+  personality:
+    - Approachable
+    - Witty
+    - Practical
+    - Modern
+  priorities:
+    - product
+    - audience
+    - brand_strategy
+  concept_relevant:    "Approachable smart-home control that just works."
+  position_relevant:   "The friendly alternative to subscription-based smart-home ecosystems."
+  emotion_relevant:    "Calm confidence that the home is taken care of."
+  function_relevant:   "Voice-controlled hub for lights, locks and thermostats."
+  benefit_relevant:    "Saves time on setup and money on monthly fees."
+  category_relevant:   "Consumer smart-home hub."
+  feature_relevant:    "Five-minute setup, no subscription, voice control."
+  context_relevant:    "Urban rentals where simple, removable installs matter."
+  keywords:
+    - smart home
+    - voice control
+    - hub
+    - subscription-free
+    - quick setup
+    - lights
+    - locks
+    - thermostat
+    - renter-friendly
+    - urban

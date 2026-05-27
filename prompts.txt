@@ -1,0 +1,178 @@
+Sub-clue: Concept-Relevant
+
+LLM Prompt: You are a brand strategy consultant interpreting a company’s description of their brand strategy below, which details how they intend to be perceived by their audience, and what they seek to be known for. Your task is to identify the single most important idea in the brand strategy — the one that, if removed, would make the brand unrecognizable — and distill it into one sentence. Use your own language to communicate your implicit understanding of the company’s aspiration, but don’t make stuff up. Your summary will be used by a creative director to inform and inspire creative material on behalf of the company. Write only the sentence — no preamble, no explanation, no quotation marks. Keep it to 10-20 words.
+
+Sub-clue: Position-Relevant
+
+LLM Prompt: You are a brand strategy consultant interpreting a company’s description of their brand strategy below, which details how they intend to be perceived by their audience, and what they seek to be known for. Your task is to summarize how the company seeks to be positioned amongst its competitors – in terms of price, proposition, and/or promise – in one sentence. Use your own language to communicate your implicit understanding of the company’s aspiration, but don’t make stuff up. Your summary will be used by a creative director to inform and inspire creative material on behalf of the company. Write only the sentence — no preamble, no explanation, no quotation marks. Keep it to 15–25 words.
+
+Sub-clue: Emotion-Relevant
+
+LLM Prompt: You are a brand strategy consultant interpreting a company’s description of their brand strategy below, which details how they intend to be perceived by their audience, and what they seek to be known for. Your task is to distill the feelings or emotions that the company seeks to spur within its audience into one sentence. Do not describe features or capabilities of the brand — only the feelings those features produce in a person. Use your own language to communicate your implicit understanding of the company’s aspiration, but don’t make stuff up. Your summary will be used by a creative director to inform and inspire creative material on behalf of the company. Write only the sentence — no preamble, no explanation, no quotation marks. Keep it to 15–25 words.
+
+Sub-clue: Function-Relevant
+
+LLM Prompt: Reading between the lines, summarize the product or service description below in 15-25 words, capturing essential information about what it is, what it does, and how it works. Focus on its function, not on its benefits or emotional value. No preamble, no explanation, no quotation marks.
+
+Sub-clue: Benefit-Relevant
+
+LLM Prompt: Reading between the lines, your task is to distill the tangible and intangible benefits of using the product or service described below, in 15-25 words. No preamble, no explanation, no quotation marks.
+
+Sub-clue: Category-Relevant
+
+LLM Prompt: Based on your implicit understanding of the product or service description below, summarize the category that it operates within, in 15-20 words. No preamble, no explanation, no quotation marks.
+
+Sub-clue: Feature-Relevant
+
+LLM Prompt: Your task is to capture the most important and consequential features of the product or service described below, in 15-25 words. Move beyond the basic information and shed light on the details. No preamble, no explanation, no quotation marks.
+
+Sub-clue: Context-Relevant
+
+LLM Prompt: Reading between the lines, your task is to summarize the social, physical and environmental context(s) in which the product or service described below exists, in 15-25 words. No preamble, no explanation, no quotation marks.
+
+
+
+
+Keyword extraxction brief:
+
+
+You are a linguistic analyst preparing raw material for a brand naming project.
+Your task is to extract exactly 10 key terms from the brand brief below.
+
+The naming team will use these terms as building blocks — combining, morphing, 
+and riffing on them to generate name candidates. Your job is purely to extract 
+and surface the right raw material. Do not name, invent, or write copy.
+
+A strong list balances two types of terms:
+
+FOUNDATIONAL TERMS
+The core vocabulary of the brief — category words, product descriptors, and 
+literal nouns that define what this brand is and does. These may feel obvious. 
+That is intentional. Include them.
+
+Where the brief uses a word directly, prefer that word over a creative 
+equivalent. Do not substitute or upgrade — extract.
+
+This applies equally to personality attributes — if the brief names them 
+explicitly, they are valid terms as stated.
+
+When the brief contains compound or paired concepts, consider whether 
+each word has independent value as a term.
+
+Examples: the product type, the category, key functional descriptors, 
+personality attributes as written
+
+STRATEGIC TERMS
+The distinctive concepts, tensions, and territories that define how this brand 
+thinks and positions itself. Draw these from the brand strategy, personality, 
+differentiators, and any especially charged or evocative language in the brief.
+Only include a strategic term if it is clearly grounded in the brief — do not 
+reach beyond what is there.
+
+Examples: the central strategic idea, ownable personality traits, key 
+differentiators expressed as single concepts
+
+Rules for all terms:
+- Single words only, or widely recognised hyphenated terms (e.g. always-on)
+- No invented compounds or multi-word phrases
+- No synonyms or near-duplicates — if two terms cover the same territory, 
+  pick the stronger one
+- No terms so generic they could apply to any brand (e.g. "innovative", 
+  "powerful")
+
+Work in two steps:
+Step 1: Scan the entire brief and list every word or recognised 
+hyphenated term that could plausibly be a useful building block 
+for naming. Do not filter by word type — nouns, verbs, and 
+adjectives are all valid candidates if they carry naming potential.
+Only include words that are actually present in the brief — 
+do not generate or infer beyond it.
+Step 2: From that longlist, select exactly 10 final terms that 
+best balance foundational vocabulary and strategic territories.
+Where two terms cover similar ground, prefer the one that opens 
+up more naming possibilities — a word like "adventure" has broader 
+creative range than a compound descriptor like "off-road".
+Avoid over-representing any single section of the brief — aim 
+for coverage across product description, differentiators, 
+strategy, and personality.
+Only select terms that describe what the brand is, does, or 
+stands for — avoid terms that describe the category, the 
+competitive situation, or the strategic narrative around 
+the brand.
+Terms that describe the user's experience or world are valid 
+— they define the brand's territory even if they aren't direct 
+brand descriptors. A term like "adventure" captures where the 
+brand operates and what it enables.
+
+Output format:
+Return Step 1 as an unnumbered longlist, followed by Step 2
+as a numbered list of exactly 10 terms. No explanations.
+
+BRIEF:
+[INSERT BRIEF]
+
+
+Keyword extraction brief (Version B — Reduced scaffolding):
+
+You are a linguistic analyst preparing raw material for a brand naming project.
+Extract exactly 10 key terms from the brand brief below.
+
+The terms will be used as building blocks for naming. Do not name, invent, or
+write copy — just extract.
+
+Balance two types of terms:
+- FOUNDATIONAL: literal vocabulary of the brief — category words, product
+  descriptors, personality attributes as written. Prefer the brief's own words
+  over creative equivalents.
+- STRATEGIC: distinctive concepts, tensions, and territories from the brand
+  strategy, personality, and differentiators. Must be grounded in the brief.
+
+Rules:
+- Single words only, or widely recognised hyphenated terms (e.g. always-on)
+- No multi-word phrases or invented compounds
+- No synonyms or near-duplicates
+- No generic terms (e.g. "innovative", "powerful")
+
+Work in two steps:
+Step 1: List every word or hyphenated term in the brief that could plausibly
+be useful for naming. Only words actually in the brief.
+Step 2: Select the 10 final terms balancing foundational and strategic types.
+Aim for coverage across product, differentiators, strategy, and personality.
+
+Output format:
+Step 1 as an unnumbered longlist. Step 2 as a numbered list of exactly 10 terms.
+
+BRIEF:
+[INSERT BRIEF]
+
+
+Keyword extraction brief (Version C — Compact):
+
+Extract 10 key terms from the brand brief below for a naming project.
+
+Balance:
+- Foundational terms (literal nouns, descriptors, personality words from the brief)
+- Strategic terms (distinctive concepts grounded in the brief)
+
+Rules:
+- Single words or hyphenated terms only
+- No multi-word phrases, synonyms, or generic words
+
+Two steps:
+1. List all candidate words from the brief.
+2. Pick the final 10, balancing both types.
+
+Return Step 1 as a longlist, then Step 2 as a numbered list of 10.
+
+BRIEF:
+[INSERT BRIEF]
+
+
+Keyword extraction brief (Version D — Minimal):
+
+Extract 10 single-word (or hyphenated) keywords from the brief below.
+Mix literal vocabulary with strategic concepts. Only words actually in the brief.
+Return as a numbered list of exactly 10.
+
+BRIEF:
+[INSERT BRIEF]
