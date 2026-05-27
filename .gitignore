@@ -1,0 +1,32 @@
+# Virtual env
+.venv/
+
+# Secrets — never commit
+.env
+credentials.json
+token.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest / IDE / OS
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude / agent state (not part of the framework)
+.claude/
+
+# Experiment artefacts (large + regenerable from the runner + analyze chain)
+outputs/
+data/
+
+# Build artefacts (xlsx, html, png — regenerable from build_* scripts)
+Results/
+
+# Client-confidential input data — copy briefs.example.yml → briefs.yml locally
+briefs.yml
