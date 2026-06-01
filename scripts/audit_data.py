@@ -91,24 +91,29 @@ def _scored_csv() -> Path:
 def _workbook() -> Path:
     return cfg.RESULTS_DIR / "Prompt Eval Results.xlsx"
 
-EXPECTED_BRIEF_COUNT = 23
-EXPECTED_SENTENCE_TASKS = 8
-EXPECTED_TASKS = 9
-EXPECTED_CHEAP_MODELS = {"haiku", "gpt5mini"}
-NOISE_FLOOR_COSINE = 0.036  # plan §2; same value used elsewhere
-LENGTH_COMPLIANCE_FLOOR = 0.90
-OK_RATE_FLOOR = 0.95
+# All audit thresholds live in src/config.py (single source of truth).
+# Re-export with the names this module already uses, so existing code paths
+# below stay unchanged.
+from src.config import (
+    EXPECTED_BRIEF_COUNT,
+    EXPECTED_SENTENCE_TASKS,
+    EXPECTED_TASKS,
+    EXPECTED_CHEAP_MODELS,
+    NOISE_FLOOR_COSINE,
+    LENGTH_COMPLIANCE_FLOOR,
+    OK_RATE_FLOOR,
+    REFUSAL_RATE_CEIL,
+    ECHO_RATE_CEIL,
+    KEYWORD_COUNT_COMPLIANCE_FLOOR,
+    COSINE_ZERO_SPIKE_THRESHOLD,
+    COSINE_ZERO_SPIKE_CEIL,
+    STAGE_B_STD_CEIL,
+)
+
+# Audit-only constant — kept here because no other module needs it.
+KEYWORD_COUNT_TARGET = 10
 # Stage A target: 23 briefs × (Phase 1+2+3 configs ~142) × 2 cheap models.
 # Computed dynamically below from prompt_builder so it never drifts.
-
-# Quality thresholds
-REFUSAL_RATE_CEIL = 0.05
-ECHO_RATE_CEIL = 0.02
-KEYWORD_COUNT_TARGET = 10
-KEYWORD_COUNT_COMPLIANCE_FLOOR = 0.90
-COSINE_ZERO_SPIKE_THRESHOLD = 0.1   # cosine < this counts as "off-topic"
-COSINE_ZERO_SPIKE_CEIL = 0.05       # > this fraction triggers fail
-STAGE_B_STD_CEIL = 0.05             # median across-run std dev
 
 # Security patterns
 API_KEY_PATTERNS = [

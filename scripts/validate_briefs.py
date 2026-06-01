@@ -52,8 +52,8 @@ LENGTH_RANGES = {
     "context_relevant":  (15, 25),
 }
 
-EXPECTED_BRIEF_COUNT = 23
-EXPECTED_KEYWORD_COUNT = 10
+# Audit thresholds live in src/config.py.
+from src.config import EXPECTED_BRIEF_COUNT, EXPECTED_KEYWORD_COUNT  # noqa: E402
 
 
 def check_brief(idx: int, brief: dict) -> tuple[list[str], list[str]]:

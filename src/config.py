@@ -186,3 +186,24 @@ TOTAL_BUDGET_CEILING_USD = 63.0
 # Catches runaway spend on one provider (e.g., a stuck reasoning model burning
 # tokens) without blocking other models. Independent from the per-stage caps.
 PER_MODEL_BUDGET_CAP_USD = 8.0
+
+
+# --- Audit thresholds ---
+# Single source of truth for every quality gate used by audit_data.py,
+# audit_workbook.py, validate_briefs.py and build_xlsx.py. README references
+# these values too — keep README in sync when you change a number here.
+EXPECTED_BRIEF_COUNT = 23
+EXPECTED_KEYWORD_COUNT = 10
+EXPECTED_SENTENCE_TASKS = 8
+EXPECTED_TASKS = 9
+EXPECTED_CHEAP_MODELS = {"haiku", "gpt5mini"}
+
+NOISE_FLOOR_COSINE = 0.036              # cosine diff below this = within noise
+LENGTH_COMPLIANCE_FLOOR = 0.90          # ≥ 90% of outputs hit target length bucket
+OK_RATE_FLOOR = 0.95                    # ≥ 95% of API calls return ok
+REFUSAL_RATE_CEIL = 0.05                # ≤ 5% refusals
+ECHO_RATE_CEIL = 0.02                   # ≤ 2% echo-the-prompt outputs
+KEYWORD_COUNT_COMPLIANCE_FLOOR = 0.90   # ≥ 90% of keyword outputs hit exactly 10
+COSINE_ZERO_SPIKE_THRESHOLD = 0.1       # cosine < this counts as "off-topic"
+COSINE_ZERO_SPIKE_CEIL = 0.05           # > this fraction off-topic = fail
+STAGE_B_STD_CEIL = 0.05                 # Stage B median across-run std dev cap
