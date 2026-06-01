@@ -417,8 +417,10 @@ def check_heatmap_spot_cells(checks: list, ws_tab3, scored: pd.DataFrame) -> Non
 
 
 def check_stability_plausible(checks: list, ws_appendix) -> None:
-    """Tab 4 Stability avg-rerun-std should be < 0.05 (typical noise floor σ ≈ 0.018,
-    so std on top of that is usually ≤ 0.04). Worst std > 0.10 is suspicious."""
+    """Tab 4 Stability avg-rerun-std should be < STAGE_B_STD_CEIL (typical noise
+    floor σ ≈ 0.018, so std on top of that is usually ≤ 0.04). Worst std > 0.15
+    is suspicious."""
+    ceil = cfg.STAGE_B_STD_CEIL
     hdr = None
     for r in range(1, 80):
         if ws_appendix.cell(r, 1).value == "Task" and ws_appendix.cell(r, 5).value == "Avg rerun std":
@@ -435,13 +437,13 @@ def check_stability_plausible(checks: list, ws_appendix) -> None:
         if not isinstance(avg, (int, float)):
             break
         n += 1
-        if float(avg) >= 0.05:
+        if float(avg) >= ceil:
             bad_avg += 1
         if isinstance(worst, (int, float)) and float(worst) >= 0.15:
             bad_worst += 1
-    _check(checks, "Tab 4 Stability avg-std < 0.05",
+    _check(checks, f"Tab 4 Stability avg-std < {ceil}",
            bad_avg == 0,
-           f"{bad_avg}/{n} (task, recipe, model) cells exceed 0.05 — flagged unstable")
+           f"{bad_avg}/{n} (task, recipe, model) cells exceed {ceil} — flagged unstable")
 
 
 def check_human_review_row_count(checks: list, ws_appendix) -> None:
