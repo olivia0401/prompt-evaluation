@@ -79,7 +79,7 @@ KNOWN_ISSUES: list[KnownIssue] = [
         title="Opus 4.7 doesn't accept `temperature`",
         severity="fix",
         root_cause=(
-            "Anthropic deprecated the `temperature` parameter on Claude Opus 4.7. "
+            "Anthropic deprecated the `temperature` parameter on Opus 4.7. "
             "Passing it — even temperature=0 — returns HTTP 400. Default sampling "
             "behaviour is used regardless."
         ),

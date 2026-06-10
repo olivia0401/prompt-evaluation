@@ -197,7 +197,7 @@ def probe_anthropic(client, model_key: str, spec: dict) -> ProbeResult:
         all_ids = _list_anthropic(client)
         r.listed = spec["id"] in all_ids
         if not r.listed:
-            family = "sonnet" if "sonnet" in spec["id"] else "haiku" if "haiku" in spec["id"] else "claude"
+            family = "sonnet" if "sonnet" in spec["id"] else "haiku" if "haiku" in spec["id"] else ""
             r.similar_ids = sorted([i for i in all_ids if family in i])[:8]
     except Exception as e:
         r.listed_error = f"{type(e).__name__}: {e}"
@@ -230,7 +230,7 @@ def probe_anthropic(client, model_key: str, spec: dict) -> ProbeResult:
         r.call_ok = False
         r.call_error = f"{type(e).__name__}: {e}"
 
-    r.is_reasoning_model_confirmed = False  # current Claude models aren't reasoning models in the OpenAI sense
+    r.is_reasoning_model_confirmed = False  # current Anthropic models aren't reasoning models in the OpenAI sense
     r.verdict = _make_verdict(r, spec)
     return r
 

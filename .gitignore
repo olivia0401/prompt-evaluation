@@ -18,7 +18,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Claude / agent state (not part of the framework)
+# Local agent / session state (not part of the framework)
 .claude/
 
 # Experiment artefacts (large + regenerable from the runner + analyze chain)
