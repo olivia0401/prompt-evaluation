@@ -198,7 +198,25 @@ EXPECTED_SENTENCE_TASKS = 8
 EXPECTED_TASKS = 9
 EXPECTED_CHEAP_MODELS = {"haiku", "gpt5mini"}
 
+# Provenance: this is 2σ of the within-cell rerun cosine, and it must be
+# re-estimated across SEVERAL briefs (not one), because a single-brief σ does
+# not represent the variability seen across the full brief set. Re-run
+# `python -m scripts.measure_noise` (now multi-brief) and paste the reported
+# 2σ value here. Treat this as a tie-band only — the primary "is A really
+# better than B" signal is the paired test (see PAIRED_TEST_ALPHA), not this.
 NOISE_FLOOR_COSINE = 0.036              # cosine diff below this = within noise
+
+# Paired significance: with only 23 briefs, a higher mean is not enough — we
+# require A to beat B on a *majority of the same briefs* (Wilcoxon signed-rank
+# / sign test). A winner whose paired p-value is above this alpha is reported
+# as "stable on this sample" only, never as "proven best".
+PAIRED_TEST_ALPHA = 0.05
+
+# Cost/price provenance gate. Model IDs and per-token prices in MODELS are
+# still marked "# TODO verify". Until they are confirmed and this flag is
+# flipped to True, the workbook must hedge every cost-quality conclusion
+# ("provisional pricing") instead of stating it as fact.
+PRICES_VERIFIED = False
 LENGTH_COMPLIANCE_FLOOR = 0.90          # ≥ 90% of outputs hit target length bucket
 OK_RATE_FLOOR = 0.95                    # ≥ 95% of API calls return ok
 REFUSAL_RATE_CEIL = 0.05                # ≤ 5% refusals

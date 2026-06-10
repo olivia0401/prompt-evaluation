@@ -1,5 +1,5 @@
 """
-Pairwise comparison judge — compare two recipes head-to-head with Claude Sonnet.
+Pairwise comparison judge — compare two recipes head-to-head with the Sonnet judge.
 
 Industry rationale:
   - Absolute scoring (1-5 stars) is calibration-dependent and noisy.

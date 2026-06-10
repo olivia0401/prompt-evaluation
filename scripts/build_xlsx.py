@@ -77,6 +77,8 @@ def T_recipe(label: str) -> str:
     parts = [p.strip() for p in label.split("+")]
     return " + ".join(_CONFIG_DISPLAY_ZH.get(p, p) for p in parts)
 
+import math
+
 import numpy as np
 import openpyxl
 import pandas as pd
@@ -109,6 +111,55 @@ def _bootstrap_ci_mean(values, n_resamples: int = 1000,
         float(np.percentile(sampled_means, alpha * 100)),
         float(np.percentile(sampled_means, (1 - alpha) * 100)),
     )
+
+
+def _rankdata(arr: np.ndarray) -> np.ndarray:
+    """Average ranks (1-based), ties share the mean rank. Pure-numpy, no scipy."""
+    arr = np.asarray(arr, dtype=float)
+    order = arr.argsort(kind="mergesort")
+    ranks = np.empty(arr.size, dtype=float)
+    sorted_arr = arr[order]
+    i = 0
+    while i < arr.size:
+        j = i
+        while j + 1 < arr.size and sorted_arr[j + 1] == sorted_arr[i]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0  # 1-based average rank for the tie group
+        ranks[order[i:j + 1]] = avg
+        i = j + 1
+    return ranks
+
+
+def _paired_signed_rank_p(diffs) -> float | None:
+    """Two-sided Wilcoxon signed-rank p-value via normal approximation.
+
+    Tests H0: the paired per-brief differences are symmetric about 0 — i.e.
+    "A is no better than B on the same briefs". Zero differences are dropped.
+    Returns None when there are fewer than 6 non-zero pairs (the normal
+    approximation is unreliable and we'd rather report "not enough evidence"
+    than a misleading p-value). Pure-numpy so it works without scipy.
+
+    This is the answer to "is A *really* better than B", as opposed to "is A's
+    mean a hair higher" — exactly the small-sample trap with only 23 briefs.
+    """
+    arr = np.asarray([d for d in diffs if d == d], dtype=float)  # drop NaN
+    arr = arr[arr != 0.0]
+    n = arr.size
+    if n < 6:
+        return None
+    ranks = _rankdata(np.abs(arr))
+    w_plus = float(ranks[arr > 0].sum())
+    mean_w = n * (n + 1) / 4.0
+    # Tie correction for the variance term.
+    _, counts = np.unique(np.abs(arr), return_counts=True)
+    tie_term = float(((counts ** 3 - counts).sum())) / 48.0
+    var_w = (n * (n + 1) * (2 * n + 1)) / 24.0 - tie_term
+    if var_w <= 0:
+        return None
+    # Continuity-corrected |z|, then two-sided p = erfc(|z| / sqrt(2)).
+    z = max(0.0, abs(w_plus - mean_w) - 0.5) / math.sqrt(var_w)
+    return float(min(1.0, math.erfc(z / math.sqrt(2))))
+
 
 DST = cfg.RESULTS_DIR / "Prompt Eval Results.xlsx"
 SCORED_CSV = cfg.OUTPUTS_DIR / "scored.csv"
@@ -309,6 +360,42 @@ def _keyword_prompt_lengths() -> pd.DataFrame:
     return df
 
 
+def _keyword_b_numbers() -> dict | None:
+    """Live A→B keyword-prompt compression numbers (computed from prompts.txt),
+    so the Executive Summary never ships a stale hand-typed '63% / 3,306 / 1,225'.
+    Returns {pct, chars_a, chars_b, tokens_saved} or None if unavailable."""
+    df = _keyword_prompt_lengths()
+    if df.empty:
+        return None
+    vers = set(df["Prompt version"])
+    if "A — Full" not in vers or "B — Reduced" not in vers:
+        return None
+    a = df[df["Prompt version"] == "A — Full"].iloc[0]
+    b = df[df["Prompt version"] == "B — Reduced"].iloc[0]
+    chars_a, chars_b = int(a["Characters"]), int(b["Characters"])
+    if chars_a <= 0:
+        return None
+    return {
+        "pct": round((chars_a - chars_b) / chars_a * 100),
+        "chars_a": chars_a,
+        "chars_b": chars_b,
+        "tokens_saved": int(a["Est. tokens"]) - int(b["Est. tokens"]),
+    }
+
+
+def _top_single_field(scored: pd.DataFrame) -> str | None:
+    """Name of the strongest single brief field by mean cosine — computed, so
+    the 'product was the strongest single field' claim can't go stale."""
+    try:
+        fc = _field_contribution_summary(scored)
+        tops = fc.get("top_fields") or []
+        if tops:
+            return str(tops[0]).split(" (")[0].strip()
+    except Exception:
+        pass
+    return None
+
+
 def _stability_summary(scored: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     """
     Per-cell rerun std-dev — the *true* measure of stability.
@@ -443,7 +530,7 @@ def _pairwise_summary() -> tuple[pd.DataFrame, str]:
 
 def _phase4_premium_summary(scored: pd.DataFrame) -> tuple[pd.DataFrame, str, str | None]:
     """
-    Phase 4 answer to the headline question: "what quality can we get with the best models?"
+    Phase 4 directional check: "do stronger models look worth follow-up?"
 
     Three-tier ladder: cheap (haiku, gpt5mini) → medium (sonnet, gpt5)
     → premium (opus47, gpt55). For each sentence task we take the top-1
@@ -451,9 +538,9 @@ def _phase4_premium_summary(scored: pd.DataFrame) -> tuple[pd.DataFrame, str, st
     (task, recipe) on every available model, then compute:
       - Δ cheap→medium  : does paying ~3-4× more close any gap?
       - Δ medium→premium: does paying ~5-10× more on top of medium close more?
-    This tells the reader whether premium is genuinely needed or medium is the
-    sweet spot. Without medium as a calibration point, "premium ≥ cheap"
-    isn't actionable.
+    Phase 4 is intentionally small: it only validates the premium ladder on
+    the curated briefs that were actually run, so the output is directional
+    evidence, not a full 23-brief validation.
 
     Returns:
       (table_df, status_msg, conclusion_msg)
@@ -475,6 +562,12 @@ def _phase4_premium_summary(scored: pd.DataFrame) -> tuple[pd.DataFrame, str, st
             "show up here once Phase 4 is run.",
             "Phase 4 尚未运行。中端和旗舰模型结果在 Phase 4 跑完后会显示在这里。"
         ), None
+
+    phase4_rows = sent[sent["model_key"].isin(medium | premium)]
+    phase4_briefs = int(phase4_rows["brief_id"].nunique()) if "brief_id" in phase4_rows.columns else 0
+    phase4_scope = (
+        f"{phase4_briefs} curated briefs" if phase4_briefs else "the curated Phase 4 brief subset"
+    )
 
     # Pick top-1 per task using cheap-model average — the choice mustn't be
     # influenced by the medium/premium re-run we're comparing against.
@@ -557,50 +650,48 @@ def _phase4_premium_summary(scored: pd.DataFrame) -> tuple[pd.DataFrame, str, st
 
     if not big_cm and not big_mp:
         verdict = T(
-            f"Cheap models are sufficient. The quality gain from medium "
+            f"Directional only ({phase4_scope}): cheap models look sufficient. "
+            f"The quality gain from medium "
             f"({avg_cm:+.3f}) and from premium ({avg_mp:+.3f}) is negligible. "
-            f"Recommendation: stay with cheap models. The premium upgrade is "
-            f"not worth the cost.",
-            f"便宜模型已足够。中端模型带来的提升（{avg_cm:+.3f}）"
+            f"Do not treat this as full validation across all 23 briefs.",
+            f"仅作方向参考（{phase4_briefs or '少量'} 个代表性 brief）：便宜模型看起来已足够。中端模型带来的提升（{avg_cm:+.3f}）"
             f"和旗舰模型带来的提升（{avg_mp:+.3f}）都可以忽略。"
-            f"建议：继续使用便宜模型；旗舰层升级不值得付费。"
+            f"不要把这解读为覆盖全部 23 个 brief 的完整验证。"
         )
         kind = "green"
     elif big_cm and not big_mp:
         verdict = T(
-            f"Medium is the sweet spot. Cheap to medium gives a real lift "
+            f"Directional only ({phase4_scope}): medium may be the sweet spot. "
+            f"Cheap to medium gives a lift "
             f"({avg_cm:+.3f}). Medium to premium adds almost nothing "
-            f"({avg_mp:+.3f}). Recommendation: use medium for important tasks; "
-            f"skip premium.",
-            f"中端模型是最佳平衡点。从便宜升到中端有实质提升（{avg_cm:+.3f}）。"
+            f"({avg_mp:+.3f}). Validate on all 23 briefs before shipping a model upgrade.",
+            f"仅作方向参考（{phase4_briefs or '少量'} 个代表性 brief）：中端模型可能是平衡点。从便宜升到中端有提升（{avg_cm:+.3f}）。"
             f"再升到旗舰几乎没有提升（{avg_mp:+.3f}）。"
-            f"建议：重要任务用中端，跳过旗舰。"
+            f"上线模型升级前应先覆盖全部 23 个 brief 验证。"
         )
         kind = "yellow"
     elif not big_cm and big_mp:
         verdict = T(
-            f"Quality jump only at premium. Medium does not help "
-            f"({avg_cm:+.3f}); premium does ({avg_mp:+.3f}). Recommendation: "
-            f"stay with cheap by default; use premium only when quality is "
-            f"the top priority.",
-            f"只有旗舰才带来质量提升。中端模型没用（{avg_cm:+.3f}），"
-            f"旗舰有用（{avg_mp:+.3f}）。建议：默认使用便宜模型；"
-            f"只有当质量是首要目标时才用旗舰。"
+            f"Directional only ({phase4_scope}): premium may help. Medium does not "
+            f"({avg_cm:+.3f}); premium does ({avg_mp:+.3f}). Validate on all 23 briefs "
+            f"and confirm prices before any cost-quality claim.",
+            f"仅作方向参考（{phase4_briefs or '少量'} 个代表性 brief）：旗舰可能有帮助。中端没有提升（{avg_cm:+.3f}），"
+            f"旗舰有提升（{avg_mp:+.3f}）。任何成本质量结论前都要覆盖全部 23 个 brief 并确认价格。"
         )
         kind = "yellow"
     else:
         verdict = T(
-            f"Quality scales with price. Both medium ({avg_cm:+.3f}) and "
-            f"premium ({avg_mp:+.3f}) deliver meaningful gains. "
-            f"Recommendation: pick the tier that matches the budget.",
-            f"质量随价格上升。中端（{avg_cm:+.3f}）和旗舰（{avg_mp:+.3f}）"
-            f"都带来了有意义的提升。建议：根据预算选择对应层级。"
+            f"Directional only ({phase4_scope}): quality appears to scale with price. "
+            f"Medium ({avg_cm:+.3f}) and premium ({avg_mp:+.3f}) both improve. "
+            f"Validate on all 23 briefs and confirmed pricing before choosing a tier.",
+            f"仅作方向参考（{phase4_briefs or '少量'} 个代表性 brief）：质量似乎随价格上升。中端（{avg_cm:+.3f}）和旗舰（{avg_mp:+.3f}）"
+            f"都有提升。选择层级前需覆盖全部 23 个 brief 并确认价格。"
         )
         kind = "neutral"
 
     status = T(
-        f"Phase 4 data loaded: {len(df)} task rows.",
-        f"已加载 Phase 4 数据：{len(df)} 行任务。"
+        f"Phase 4 data loaded: {len(df)} task rows on {phase4_scope}; use as directional evidence only.",
+        f"已加载 Phase 4 数据：{len(df)} 行任务，覆盖 {phase4_briefs or '少量'} 个代表性 brief；仅作方向参考。"
     )
     return df, status, f"{kind}|{verdict}"
 
@@ -658,12 +749,17 @@ def write_header_row(ws, row, headers, fill=LIGHT_GREY):
 
 
 def write_df(ws, df: pd.DataFrame, start_row: int, *, with_header=True,
-             row_fills: list | None = None) -> int:
+             row_fills: list | None = None, bold_cols: set | None = None) -> int:
     """Render a DataFrame as a table. Optional per-row background fills.
 
     row_fills, if provided, is one PatternFill (or None) per data row in df.
     Used to highlight Recommended rows green and baseline / no-go rows grey
     on the decision tables (Tab 2 main, Tab 3 keyword compression).
+
+    bold_cols, if provided, is a set of 1-based column indices whose DATA cells
+    are rendered bold — used to flag values that are auto-computed from the
+    underlying data (vs fixed editorial text), so a reader can tell at a glance
+    which numbers update on every rebuild.
     """
     if with_header:
         write_header_row(ws, start_row, list(df.columns))
@@ -672,7 +768,9 @@ def write_df(ws, df: pd.DataFrame, start_row: int, *, with_header=True,
     for i, row_tuple in enumerate(df.itertuples(index=False)):
         fill = row_fills[i] if (row_fills and i < len(row_fills)) else None
         for c, val in enumerate(row_tuple, 1):
-            cell = write_cell(ws, start_row, c, val, border=THIN_BORDER, fill=fill)
+            cell_font = Font(bold=True) if (bold_cols and c in bold_cols) else None
+            cell = write_cell(ws, start_row, c, val, border=THIN_BORDER, fill=fill,
+                              font=cell_font)
             # Numbers center-aligned; everything else gets wrap_text on so
             # nothing truncates. (Previous version skipped wrap for strings
             # under 30 chars, which broke Chinese cells in narrow columns.)
@@ -741,36 +839,285 @@ def _quality_cost_data(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-# Per-model production recommendation + explanation. User-approved wording.
-# Quality/cost numbers come from the data; the rec + note are fixed strings.
-_MODEL_RECS_EN = {
+def _candidate_sort(df: pd.DataFrame, *, score_col: str, cost_col: str) -> pd.DataFrame:
+    """Deterministic ranking: quality first, then lower cost, then config/model id."""
+    return df.sort_values(
+        [score_col, cost_col, "config_id", "model_key"],
+        ascending=[False, True, True, True],
+    )
+
+
+def _select_practical_winner(
+    candidates: pd.DataFrame,
+    *,
+    score_col: str,
+    cost_col: str,
+    noise: float,
+    override_cfg: str | None = None,
+):
+    """Pick the cheapest candidate within the noise floor of the top score.
+
+    This is the core recommendation rule: a tiny quality lead is not a win.
+    If the score gap is below the measured noise floor, the lower-cost prompt
+    or model wins.
+    """
+    if candidates.empty:
+        return None
+
+    if override_cfg:
+        forced = candidates[
+            (candidates["config_id"] == override_cfg)
+            & candidates["model_key"].isin(("haiku", "gpt5mini"))
+        ]
+        if not forced.empty:
+            return forced.sort_values(
+                [cost_col, score_col, "model_key"],
+                ascending=[True, False, True],
+            ).iloc[0]
+
+    best_score = float(candidates[score_col].max())
+    tied = candidates[candidates[score_col] >= best_score - noise]
+    return tied.sort_values(
+        [cost_col, score_col, "config_id", "model_key"],
+        ascending=[True, False, True, True],
+    ).iloc[0]
+
+
+def _candidate_brief_scores(scored: pd.DataFrame, task: str, candidates: pd.DataFrame) -> pd.DataFrame:
+    """Per-brief mean cosine for one task and candidate set."""
+    if scored.empty or candidates.empty:
+        return pd.DataFrame()
+    sent = scored[
+        scored["cosine"].notna()
+        & (scored["task"] == task)
+        & scored["brief_id"].notna()
+    ].copy()
+    if sent.empty:
+        return pd.DataFrame()
+    keys = candidates[["config_id", "model_key"]].drop_duplicates()
+    sent = sent.merge(keys, on=["config_id", "model_key"], how="inner")
+    if sent.empty:
+        return pd.DataFrame()
+    return (
+        sent.groupby(["brief_id", "config_id", "model_key"], as_index=False)
+        .agg(cosine=("cosine", "mean"))
+    )
+
+
+def _brief_level_stats(
+    scored: pd.DataFrame,
+    task: str,
+    winner,
+    candidates: pd.DataFrame,
+    *,
+    noise: float,
+    baseline_score: float | None,
+    override_cfg: str | None = None,
+) -> dict:
+    """Paired per-brief evidence and leave-one-brief-out stability."""
+    stats = {
+        "median_delta": None,
+        "p_value": None,
+        "wins": 0,
+        "losses": 0,
+        "ties": 0,
+        "briefs": 0,
+        "loo_first": 0,
+        "loo_top3": 0,
+        "loo_total": 0,
+        "gap_vs_best": None,
+        "above_noise": False,
+        "delta_vs_full": None,
+    }
+    if winner is None or candidates.empty:
+        return stats
+
+    winner_key = (winner["config_id"], winner["model_key"])
+    sorted_candidates = _candidate_sort(candidates, score_col="mean_cosine", cost_col="mean_cost_usd_per_call")
+    absolute_best = sorted_candidates.iloc[0]
+    stats["gap_vs_best"] = float(absolute_best["mean_cosine"] - winner["mean_cosine"])
+    stats["above_noise"] = abs(stats["gap_vs_best"]) >= noise
+    if baseline_score is not None and pd.notna(baseline_score):
+        stats["delta_vs_full"] = float(winner["mean_cosine"] - baseline_score)
+
+    per_brief = _candidate_brief_scores(scored, task, candidates)
+    if per_brief.empty:
+        return stats
+
+    pivot = per_brief.pivot_table(
+        index="brief_id",
+        columns=["config_id", "model_key"],
+        values="cosine",
+        aggfunc="mean",
+    )
+    if winner_key in pivot.columns:
+        peer_cols = [c for c in pivot.columns if c != winner_key]
+        if peer_cols:
+            # Compare the winner against the SINGLE strongest peer by mean
+            # cosine — NOT the per-brief max across all peers. Taking the
+            # per-brief max of many peers is a winner's-curse artifact: the
+            # max is biased upward, so a fixed winner "loses" on almost every
+            # brief (median Δ goes negative, W/T/L fills with losses, and the
+            # signed-rank p collapses to 0.00 in the *wrong* direction). The
+            # runner-up-by-mean comparison matches audit D4's sign test.
+            best_peer_key = pivot[peer_cols].mean(axis=0).idxmax()
+            best_peer = pivot[best_peer_key]
+            paired = (pivot[winner_key] - best_peer).dropna()
+            if not paired.empty:
+                stats["median_delta"] = float(paired.median())
+                stats["wins"] = int((paired > noise).sum())
+                stats["losses"] = int((paired < -noise).sum())
+                stats["ties"] = int((paired.abs() <= noise).sum())
+                stats["briefs"] = int(paired.shape[0])
+                # Paired significance: does the winner beat the best peer on the
+                # SAME briefs, not just on average? None when too few pairs.
+                stats["p_value"] = _paired_signed_rank_p(paired.values)
+
+    loo_total = 0
+    loo_first = 0
+    loo_top3 = 0
+    for brief_id in sorted(per_brief["brief_id"].dropna().unique()):
+        reduced = per_brief[per_brief["brief_id"] != brief_id]
+        if reduced.empty:
+            continue
+        loo = (
+            reduced.groupby(["config_id", "model_key"], as_index=False)
+            .agg(
+                mean_cosine=("cosine", "mean"),
+                mean_cost_usd_per_call=("cosine", lambda _: 0.0),
+            )
+        )
+        loo = loo.merge(
+            candidates[["config_id", "model_key", "mean_cost_usd_per_call"]],
+            on=["config_id", "model_key"],
+            how="left",
+            suffixes=("", "_candidate"),
+        )
+        loo["mean_cost_usd_per_call"] = loo["mean_cost_usd_per_call_candidate"].fillna(0.0)
+        loo = loo.drop(columns=[c for c in loo.columns if c.endswith("_candidate")])
+        loo_winner = _select_practical_winner(
+            loo,
+            score_col="mean_cosine",
+            cost_col="mean_cost_usd_per_call",
+            noise=noise,
+            override_cfg=override_cfg,
+        )
+        if loo_winner is None:
+            continue
+        loo_total += 1
+        if (loo_winner["config_id"], loo_winner["model_key"]) == winner_key:
+            loo_first += 1
+        top3 = _candidate_sort(loo, score_col="mean_cosine", cost_col="mean_cost_usd_per_call").head(3)
+        if any((r["config_id"], r["model_key"]) == winner_key for _, r in top3.iterrows()):
+            loo_top3 += 1
+
+    stats["loo_total"] = loo_total
+    stats["loo_first"] = loo_first
+    stats["loo_top3"] = loo_top3
+    return stats
+
+
+def _decision_tier(delta_vs_full, gap_vs_best, loo_first: int, loo_total: int, *,
+                   noise: float, p_value=None, median_delta=None,
+                   alpha: float | None = None) -> str:
+    """Recommendation framing for small-sample results.
+
+    Deliberately avoids absolute language ("ship" / "best"). The strongest
+    label we allow is "Recommended (stable on this sample)", and we only grant
+    it when BOTH hold:
+      - leave-one-brief-out keeps the same winner ≥75% of the time, AND
+      - the winner beats its best peer on the same briefs at the paired test
+        (p < alpha) with a positive median delta.
+    A higher mean alone is never enough — that is the small-sample trap.
+    """
+    if alpha is None:
+        alpha = getattr(cfg, "PAIRED_TEST_ALPHA", 0.05)
+    stable = loo_total == 0 or loo_first >= max(1, int(np.ceil(0.75 * loo_total)))
+    sig_better = (
+        p_value is not None and p_value < alpha
+        and (median_delta is None or float(median_delta) > 0)
+    )
+    if delta_vs_full is not None and delta_vs_full < -noise:
+        return T("Not recommended", "不推荐")
+    if gap_vs_best is not None and gap_vs_best > noise:
+        return T("Not recommended", "不推荐")
+    if stable and sig_better:
+        return T("Recommended (stable on this sample)", "推荐（本样本稳定）")
+    # Within noise of the best / baseline, or lead not statistically confirmed:
+    # honest framing is "usable, prefer the cheaper option", not a win.
+    return T("Cost-priority usable", "成本优先可用")
+
+
+# Per-model production recommendation + explanation.
+# NOTE: every number in the note is a {placeholder} filled from live data by
+# _build_model_recs() at build time — nothing here is hand-typed, so a re-run
+# can never ship a stale figure (the old "46%" / "0.603" hardcodes did).
+#   {q}  = this model's mean cosine
+#   {qd} = the default model's (gpt5mini) mean cosine
+#   {rl} = share of this model's calls whose final status was rate_limited
+_MODEL_REC_TEMPLATES_EN = {
     "gpt5mini": ("Default",
-                 "Highest average quality across all tested cells (0.603) and ~80x cheaper than Opus."),
+                 "Highest average quality across tested cells ({q:.3f}); cost advantage is provisional until prices are verified."),
     "haiku":    ("Not recommended",
-                 "Rate-limit / reliability risk — ~46% of calls hit rate limits; lower throughput than GPT-5-mini."),
+                 "Rate-limit / reliability risk — {rl:.0f}% of calls ended rate-limited; lower throughput than GPT-5-mini."),
     "gpt5":     ("Not default",
-                 "Below GPT-5-mini on average (0.594 vs 0.603) at ~6x the cost."),
+                 "Below GPT-5-mini on average ({q:.3f} vs {qd:.3f}); do not prefer unless verified pricing or quality changes."),
     "sonnet":   ("Not default",
-                 "Below GPT-5-mini on average (0.582 vs 0.603) at ~10x the cost."),
+                 "Below GPT-5-mini on average ({q:.3f} vs {qd:.3f}); keep as reference until human validation and prices are confirmed."),
     "gpt55":    ("Skip",
-                 "Below GPT-5-mini on average (0.582 vs 0.603); no advantage."),
+                 "Below GPT-5-mini on average ({q:.3f} vs {qd:.3f}); no advantage."),
     "opus47":   ("Feature task escalation only",
-                 "Wins on feature_relevant (+0.046) but loses on the other 7 sentence tasks; ~80x cost."),
+                 "Small-sample Phase 4 signal only; validate on all 23 briefs and confirmed pricing before escalation."),
 }
-_MODEL_RECS_ZH = {
+_MODEL_REC_TEMPLATES_ZH = {
     "gpt5mini": ("默认",
-                 "在所有测试单元格上平均质量最高（0.603），且成本约为 Opus 的 1/80。"),
+                 "在测试单元格上平均质量最高（{q:.3f}）；成本优势需等价格校准后再写死。"),
     "haiku":    ("备用",
-                 "成本相近，但约 46% 调用被限流；吞吐量低于 GPT-5-mini。"),
+                 "成本相近，但约 {rl:.0f}% 调用最终被限流；吞吐量低于 GPT-5-mini。"),
     "gpt5":     ("不建议默认",
-                 "平均质量低于 GPT-5-mini（0.594 vs 0.603），成本约高 6 倍。"),
+                 "平均质量低于 GPT-5-mini（{q:.3f} vs {qd:.3f}）；除非价格或质量校准结果变化，否则不优先。"),
     "sonnet":   ("不建议默认",
-                 "平均质量低于 GPT-5-mini（0.582 vs 0.603），成本约高 10 倍。"),
+                 "平均质量低于 GPT-5-mini（{q:.3f} vs {qd:.3f}）；人工验证和价格确认前仅作参考。"),
     "gpt55":    ("跳过",
-                 "平均质量低于 GPT-5-mini（0.582 vs 0.603）；无优势。"),
+                 "平均质量低于 GPT-5-mini（{q:.3f} vs {qd:.3f}）；无优势。"),
     "opus47":   ("仅 feature 任务升级用",
-                 "在 feature_relevant 上更好（+0.046），但在其他 7 个句子型任务上反而更差；成本约高 80 倍。"),
+                 "只有小样本 Phase 4 方向信号；升级前需覆盖全部 23 个 brief 并确认价格。"),
 }
+
+
+def _model_rate_limit_pct(raw: pd.DataFrame, model_key: str) -> float:
+    """Share (%) of a model's calls whose FINAL status was rate_limited.
+
+    SDK-level retries are invisible (they happen inside the provider client),
+    so this is the unrecovered rate-limit rate actually present in the data —
+    a real, self-updating number rather than a typed-in constant.
+    """
+    if raw is None or raw.empty or "status" not in raw.columns:
+        return 0.0
+    sub = raw[raw["model_key"] == model_key]
+    if sub.empty:
+        return 0.0
+    return 100.0 * float((sub["status"] == "rate_limited").mean())
+
+
+def _build_model_recs(scored: pd.DataFrame, raw: pd.DataFrame) -> dict:
+    """Fill the rec-note templates with live numbers from scored/raw."""
+    templates = _MODEL_REC_TEMPLATES_ZH if LANG == "zh" else _MODEL_REC_TEMPLATES_EN
+    q_by_model = (
+        scored[scored["cosine"].notna()].groupby("model_key")["cosine"].mean()
+        if not scored.empty else pd.Series(dtype=float)
+    )
+    qd = float(q_by_model.get("gpt5mini", float("nan")))
+    recs: dict[str, tuple[str, str]] = {}
+    for m, (label, tmpl) in templates.items():
+        q = float(q_by_model.get(m, float("nan")))
+        rl = _model_rate_limit_pct(raw, m)
+        try:
+            note = tmpl.format(q=q, qd=qd, rl=rl)
+        except (KeyError, ValueError):
+            note = tmpl
+        recs[m] = (label, note)
+    return recs
 
 
 def _model_comparison_table(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFrame:
@@ -778,9 +1125,9 @@ def _model_comparison_table(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataF
 
     Columns: Model / Avg quality / Avg cost per call / Production rec / Note.
 
-    Quality and cost are computed from scored/raw. Recommendation and note are
-    fixed user-approved strings from _MODEL_RECS, so the wording on Tab 2 stays
-    exactly as the stakeholder saw it.
+    Quality and cost are computed from scored/raw. The recommendation label is
+    fixed wording, but every NUMBER in the note is filled from live data by
+    _build_model_recs(), so Tab 2 can never display a stale figure.
     """
     if scored.empty or raw.empty:
         return pd.DataFrame()
@@ -793,7 +1140,7 @@ def _model_comparison_table(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataF
     if quality_by_model.empty:
         return pd.DataFrame()
 
-    rec_map = _MODEL_RECS_ZH if LANG == "zh" else _MODEL_RECS_EN
+    rec_map = _build_model_recs(scored, raw)
 
     rows = []
     # Order: cheap first, then medium, then premium
@@ -851,9 +1198,8 @@ def _best_per_task_table(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFram
     if qc.empty:
         return pd.DataFrame()
     baseline = _full_brief_baseline_by_task(scored)
-    # Need raw per-call cosines for bootstrap CI on each (task, winning recipe, model).
     sent = scored[scored["cosine"].notna()] if not scored.empty else scored
-    NOISE = 0.036
+    NOISE = cfg.NOISE_FLOOR_COSINE
     rows = []
     for task, g in qc.groupby("task"):
         # Tasks in _PER_TASK_CHEAP_TIER_ONLY must ship a cheap-tier model
@@ -864,105 +1210,77 @@ def _best_per_task_table(scored: pd.DataFrame, raw: pd.DataFrame) -> pd.DataFram
             if not cheap_g.empty:
                 g = cheap_g
 
-        # Per-task recipe override — when set, force the winner to a
-        # specific (config_id, cheap-tier) row so the recipe column matches
-        # what Tab 1 and Analysis hardcode. Only applies when the recipe
-        # actually exists on the cheap tier; otherwise fall back to the
-        # normal cost-tiebreak winner.
-        override_cfg = _PER_TASK_RECIPE_OVERRIDE.get(task)
-        if override_cfg:
-            forced = g[
-                (g["config_id"] == override_cfg)
-                & g["model_key"].isin(("haiku", "gpt5mini"))
-            ]
-            if not forced.empty:
-                winner = forced.sort_values(
-                    ["mean_cost_usd_per_call", "mean_cosine"],
-                    ascending=[True, False]
-                ).iloc[0]
-                absolute_best = g.sort_values("mean_cosine", ascending=False).iloc[0]
-                base_score = baseline.get(task)
-                delta_vs_full = (winner["mean_cosine"] - base_score) if (base_score is not None) else None
-                # CI on the forced winner cell
-                if not sent.empty:
-                    cell_vals = sent[
-                        (sent["task"] == task)
-                        & (sent["config_id"] == winner["config_id"])
-                        & (sent["model_key"] == winner["model_key"])
-                    ]["cosine"].tolist()
-                else:
-                    cell_vals = []
-                if len(cell_vals) >= 2:
-                    ci_lo, ci_hi = _bootstrap_ci_mean(cell_vals)
-                    ci_str = (f"[{ci_lo:.2f}, {ci_hi:.2f}]"
-                              if not (pd.isna(ci_lo) or pd.isna(ci_hi)) else "—")
-                else:
-                    ci_str = "—"
-                recipe_label = T_recipe(humanize_config(winner["config_id"]))
-                delta_rounded = (round(float(delta_vs_full), 3)
-                                  if delta_vs_full is not None else None)
-                vs_full = _comparison_vs_full_brief(delta_rounded, base_score)
-                override_action = _per_task_production_action(task)
-                prod_action = override_action if override_action is not None else _final_decision(recipe_label)
-                rows.append({
-                    T("Task", "任务"): T_task(task),
-                    T("Recipe", "配方"): recipe_label,
-                    T("Model", "模型"): winner["model_key"],
-                    T("Avg score", "平均分数"):
-                        round(float(winner["mean_cosine"]), 3),
-                    T("Vs Full Brief", "对比完整 brief"): vs_full,
-                    T("Decision", "决定"): prod_action,
-                    T("Why", "原因"): _per_task_reason(task),
-                })
-                continue  # skip the normal selection below for this task
-
-        absolute_best = g.sort_values("mean_cosine", ascending=False).iloc[0]
-        good_enough = g[g["mean_cosine"] >= absolute_best["mean_cosine"] - NOISE]
-        winner = good_enough.sort_values(
-            ["mean_cost_usd_per_call", "mean_cosine"], ascending=[True, False]
+        absolute_best = _candidate_sort(
+            g, score_col="mean_cosine", cost_col="mean_cost_usd_per_call"
         ).iloc[0]
-        rec = _recommendation_label(
-            float(winner["mean_cosine"]), float(winner["mean_cost_usd_per_call"]),
-            float(absolute_best["mean_cosine"]), float(absolute_best["mean_cost_usd_per_call"]),
+        override_cfg = _PER_TASK_RECIPE_OVERRIDE.get(task)
+        winner = _select_practical_winner(
+            g,
+            score_col="mean_cosine",
+            cost_col="mean_cost_usd_per_call",
             noise=NOISE,
+            override_cfg=override_cfg,
         )
+        if winner is None:
+            continue
         base_score = baseline.get(task)
         delta_vs_full = (winner["mean_cosine"] - base_score) if (base_score is not None) else None
 
-        # 95% bootstrap CI on the winner cell's underlying cosines (across 23 briefs).
-        if not sent.empty:
-            cell_vals = sent[
-                (sent["task"] == task)
-                & (sent["config_id"] == winner["config_id"])
-                & (sent["model_key"] == winner["model_key"])
-            ]["cosine"].tolist()
-        else:
-            cell_vals = []
-        if len(cell_vals) >= 2:
-            ci_lo, ci_hi = _bootstrap_ci_mean(cell_vals)
-            ci_str = (f"[{ci_lo:.2f}, {ci_hi:.2f}]"
-                      if not (pd.isna(ci_lo) or pd.isna(ci_hi)) else "—")
-        else:
-            ci_str = "—"
-
+        stats = _brief_level_stats(
+            scored,
+            task,
+            winner,
+            g,
+            noise=NOISE,
+            baseline_score=base_score,
+            override_cfg=override_cfg,
+        )
         recipe_label = T_recipe(humanize_config(winner["config_id"]))
         delta_rounded = (round(float(delta_vs_full), 3)
                           if delta_vs_full is not None else None)
-        # Build the "Comparison vs Full Brief" cell as a single human-readable
-        # string in plain English (no Δ / no negligible-difference-line jargon).
         vs_full = _comparison_vs_full_brief(delta_rounded, base_score)
-        # Production action — task override takes precedence over the
-        # default (e.g. feature_relevant has a "default to mini, escalate
-        # if human review fails" override per user spec).
-        override = _per_task_production_action(task)
-        prod_action = override if override is not None else _final_decision(recipe_label)
+        gap_vs_best = stats["gap_vs_best"]
+        prod_action = _decision_tier(
+            delta_vs_full,
+            gap_vs_best,
+            stats["loo_first"],
+            stats["loo_total"],
+            noise=NOISE,
+            p_value=stats.get("p_value"),
+            median_delta=stats.get("median_delta"),
+        )
+        noise_verdict = (
+            T("Tie: choose cheaper", "打平：选更便宜")
+            if gap_vs_best is not None and gap_vs_best < NOISE
+            else T("Above noise floor", "超过噪声阈值")
+        )
+        median_delta = stats["median_delta"]
+        _p = stats.get("p_value")
+        _p_str = (f" p={_p:.2f}" if _p is not None else " p=n/a")
+        paired = (
+            f"{stats['wins']}/{stats['ties']}/{stats['losses']}{_p_str}"
+            if stats["briefs"] else "—"
+        )
+        loo = (
+            f"{stats['loo_first']}/{stats['loo_total']} first; "
+            f"{stats['loo_top3']}/{stats['loo_total']} top-3"
+            if stats["loo_total"] else "—"
+        )
         rows.append({
             T("Task", "任务"): T_task(task),
-            T("Recipe", "配方"): recipe_label,
+            T("Recommended recipe", "推荐配方"): recipe_label,
             T("Model", "模型"): winner["model_key"],
             T("Avg score", "平均分数"):
                 round(float(winner["mean_cosine"]), 3),
+            T("Median Δ vs next best", "中位数差值"):
+                f"{median_delta:+.3f}" if median_delta is not None else "—",
+            T("Win/Tie/Loss briefs", "胜/平/负 brief"):
+                paired,
             T("Vs Full Brief", "对比完整 brief"): vs_full,
+            T("Δ vs Full Brief", "相对完整 brief 差值"):
+                f"{delta_rounded:+.3f}" if delta_rounded is not None else "—",
+            T("Noise-floor call", "噪声阈值判断"): noise_verdict,
+            T("Leave-one-out stability", "去掉一个 brief 稳定性"): loo,
             T("Decision", "决定"): prod_action,
             T("Why", "原因"): _per_task_reason(task),
         })
@@ -1211,10 +1529,11 @@ def _keyword_compression_headline(scored: pd.DataFrame) -> str:
     ver_col = T("Version", "版本")
     red_col = T("% reduction vs A", "相对 A 压缩")
     f1d_col = T("F1 delta vs A", "相对 A 的 F1 差值")
+    desc = _prompt_description(r[ver_col])
     return T(
-        f"{r[ver_col]} compresses {r[red_col]} "
+        f"{r[ver_col]} ({desc}) compresses {r[red_col]} "
         f"with no quality loss (F1 delta {r[f1d_col]}).",
-        f"{r[ver_col]} 压缩 {r[red_col]} 且质量无损失（F1 差值 {r[f1d_col]}）。")
+        f"{r[ver_col]}（{desc}）压缩 {r[red_col]} 且质量无损失（F1 差值 {r[f1d_col]}）。")
 
 
 # ---------- Tab 1 helpers ----------
@@ -1842,7 +2161,7 @@ def _bottom_line(scored: pd.DataFrame, raw: pd.DataFrame) -> list[str]:
     template would slowly drift away from it.
 
     Refresh these values manually when scored data materially changes:
-      - bullet 1: $0.25 / $1 / $2 / $5 are GPT-5-mini vs Haiku list prices
+      - bullet 1: cost wording is provisional until config prices are verified
       - bullet 3: 0.65 = mean cosine of the `product` single-field recipe
       - bullet 4: 63% / 3,306 / 1,225 / 520 = the keyword B-Reduced numbers
     """
@@ -1852,12 +2171,11 @@ def _bottom_line(scored: pd.DataFrame, raw: pd.DataFrame) -> list[str]:
     # Bullet 1 — default model recommendation + cost comparison
     out.append(T(
         "Use GPT-5-mini as the default model. It produces quality close to "
-        "Haiku, but at noticeably lower cost. GPT-5-mini's input price is "
-        "$0.25 per million tokens versus $1 for Haiku. Output prices are "
-        "$2 and $5 respectively.",
-        "默认使用 GPT-5-mini。它的质量和 Haiku 接近，但成本明显更低。"
-        "GPT-5-mini 的输入价格是每百万 token $0.25，Haiku 是 $1；"
-        "输出价格分别是 $2 和 $5。"
+        "Haiku, with lower estimated cost in the current config. Verify "
+        "model IDs and input/output token prices before publishing exact "
+        "cost ratios.",
+        "默认使用 GPT-5-mini。它的质量和 Haiku 接近，且按当前配置估算成本更低。"
+        "发布精确成本比例前，必须先确认模型 ID 和输入/输出 token 单价。"
     ))
 
     # Bullet 2 — skip the full brief
@@ -1870,26 +2188,53 @@ def _bottom_line(scored: pd.DataFrame, raw: pd.DataFrame) -> list[str]:
         "这意味着 prompt 更短、成本更低、响应也更快。"
     ))
 
-    # Bullet 3 — product is the strongest single field
+    # Bullet 3 — strongest single field (field name + its mean cosine computed)
+    _sent_b = scored[scored["cosine"].notna()] if not scored.empty else scored
+    _topf_b = _top_single_field(scored) or "product"
+    try:
+        _topf_mean = float(
+            _sent_b[_sent_b["config_id"].apply(
+                lambda c: str(c).split(":")[-1] == _topf_b)]["cosine"].mean())
+        _topf_mean_s = f"{_topf_mean:.2f}" if _topf_mean == _topf_mean else "—"
+    except Exception:
+        _topf_mean_s = "—"
     out.append(T(
-        "The product field is the single most important field. It performs "
-        "consistently across multiple tasks with an average cosine score of "
-        "0.65, and appears often in the recommended configurations on Tab 2. "
-        "For the field combination to use on each specific task, see Tab 2.",
-        "product 字段是最重要的单一字段。它在多个任务里表现稳定，"
-        "平均余弦分数是 0.65，也经常出现在 Tab 2 的推荐配置里。"
-        "具体每个任务该用哪个字段组合，看 Tab 2。"
+        f"The {_topf_b} field is the single most important field. It performs "
+        f"consistently across multiple tasks with an average cosine score of "
+        f"{_topf_mean_s}, and appears often in the recommended configurations "
+        f"on Tab 2. For the field combination to use on each specific task, see "
+        f"Tab 2.",
+        f"{_topf_b} 字段是最重要的单一字段。它在多个任务里表现稳定，"
+        f"平均余弦分数是 {_topf_mean_s}，也经常出现在 Tab 2 的推荐配置里。"
+        f"具体每个任务该用哪个字段组合，看 Tab 2。"
     ))
 
-    # Bullet 4 — keyword prompt compression
-    out.append(T(
-        "For keyword extraction, use prompt version B — Reduced. It is 63% "
-        "shorter than the original. Character count drops from 3,306 to "
-        "1,225, saving about 520 tokens per call, with no drop in quality.",
-        "关键词抽取建议使用 B — Reduced 版 prompt。它比原版短 63%，"
-        "字符数从 3,306 降到 1,225，每次调用大约节省 520 token，"
-        "而且质量没有下降。"
-    ))
+    # Bullet 4 — keyword prompt compression (numbers computed from prompts.txt)
+    kb = _keyword_b_numbers()
+    if kb:
+        out.append(T(
+            f"For keyword extraction, use prompt version B — Reduced, i.e. the "
+            f"original prompt with the long explanations and worked examples "
+            f"removed but the role, hard rules, two-step process, and output "
+            f"format kept. It is {kb['pct']}% shorter than the original "
+            f"(character count drops from {kb['chars_a']:,} to {kb['chars_b']:,}, "
+            f"saving about {kb['tokens_saved']} tokens per call) with no drop in "
+            f"quality.",
+            f"关键词抽取建议使用 B — Reduced 版 prompt，也就是在原版基础上"
+            f"删掉冗长解释和示例、但保留角色设定、硬性规则、两步流程和输出格式的精简版。"
+            f"它比原版短 {kb['pct']}%（字符数从 {kb['chars_a']:,} 降到 "
+            f"{kb['chars_b']:,}，每次调用约省 {kb['tokens_saved']} token），"
+            f"且质量没有下降。"
+        ))
+    else:
+        out.append(T(
+            "For keyword extraction, use prompt version B — Reduced: the "
+            "original prompt with the long explanations and worked examples "
+            "removed but the role, hard rules, two-step process, and output "
+            "format kept — much shorter, with no drop in quality.",
+            "关键词抽取建议使用 B — Reduced 版 prompt：在原版基础上删掉冗长解释"
+            "和示例、但保留角色、硬规则、两步流程和输出格式——短很多，质量不降。"
+        ))
 
     return out
 
@@ -2072,10 +2417,10 @@ def _exec_key_findings(scored: pd.DataFrame, raw: pd.DataFrame) -> list[str]:
             if diff < 0.036:
                 out.append(T(
                     f"Cheap models tied on quality (gap {diff:.2f}, smaller than "
-                    f"the negligible-difference line (0.036)) — GPT-5-mini is ~3× cheaper than "
-                    f"Haiku per call, so prefer GPT-5-mini.",
+                    f"the negligible-difference line (0.036)) — prefer the lower-cost model "
+                    f"after price calibration.",
                     f"两个便宜模型质量打平（差距 {diff:.2f}，小于 0.036 可忽略差异线）—— "
-                    f"GPT-5-mini 比 Haiku 每次调用便宜约 3×，所以默认用 GPT-5-mini。"
+                    f"价格校准后优先选成本更低的模型。"
                 ))
             else:
                 winner = by_model[cheap].idxmax()
@@ -2519,41 +2864,61 @@ def _best_pairs_ranking_df(scored: pd.DataFrame, top_n: int = 5) -> pd.DataFrame
 
 
 def _per_task_picks_df(scored: pd.DataFrame) -> pd.DataFrame:
-    """Section 5 — per-task cheap-tier winner: recipe + score + Δ vs Full Brief."""
+    """Section 5 — per-task cheap-tier pick with paired and LOO evidence."""
     sent = scored[scored["cosine"].notna()] if not scored.empty else scored
     if sent.empty:
         return pd.DataFrame()
     cheap = sent[sent["model_key"].isin(_CHEAP_MODELS)]
-    NOISE = 0.036
+    NOISE = cfg.NOISE_FLOOR_COSINE
     rows = []
     for task in _SENTENCE_TASKS:
         g = cheap[cheap["task"] == task]
         if g.empty:
             continue
-        # Cheapest-within-noise of the best (cost tie-break)
-        per_cfg = g.groupby("config_id").agg(
-            avg_cos=("cosine", "mean"),
-            avg_cost=("cost_usd", "mean"),
+        per_cfg = g.groupby(["config_id", "model_key"]).agg(
+            mean_cosine=("cosine", "mean"),
+            mean_cost_usd_per_call=("cost_usd", "mean"),
         ).reset_index()
-        # Editorial recipe override — see _PER_TASK_RECIPE_OVERRIDE for why.
         override_cfg = _PER_TASK_RECIPE_OVERRIDE.get(task)
-        if override_cfg and (per_cfg["config_id"] == override_cfg).any():
-            winner = per_cfg[per_cfg["config_id"] == override_cfg].iloc[0]
-        else:
-            best = per_cfg["avg_cos"].max()
-            good = per_cfg[per_cfg["avg_cos"] >= best - NOISE]
-            winner = good.sort_values(["avg_cost", "avg_cos"], ascending=[True, False]).iloc[0]
-        # Full Brief reference on cheap tier
+        winner = _select_practical_winner(
+            per_cfg,
+            score_col="mean_cosine",
+            cost_col="mean_cost_usd_per_call",
+            noise=NOISE,
+            override_cfg=override_cfg,
+        )
+        if winner is None:
+            continue
         fb = g[g["config_id"].isin(("A:_full_brief", "_full_brief"))]["cosine"].mean()
-        delta = round(float(winner["avg_cos"] - fb), 3) if pd.notna(fb) else None
+        delta = round(float(winner["mean_cosine"] - fb), 3) if pd.notna(fb) else None
+        stats = _brief_level_stats(
+            scored,
+            task,
+            winner,
+            per_cfg,
+            noise=NOISE,
+            baseline_score=fb if pd.notna(fb) else None,
+            override_cfg=override_cfg,
+        )
         recipe = winner["config_id"].split(":", 1)[-1] if ":" in winner["config_id"] else winner["config_id"]
         recipe = recipe.replace("+", " + ")
         rows.append({
             T("Task", "任务"): task.replace("_relevant", ""),
             T("Recipe", "配方"): recipe,
-            T("Avg", "平均分"): round(float(winner["avg_cos"]), 3),
+            T("Model", "模型"): winner["model_key"],
+            T("Avg", "平均分"): round(float(winner["mean_cosine"]), 3),
+            T("Median Δ", "中位数差值"):
+                f"{stats['median_delta']:+.3f}" if stats["median_delta"] is not None else "—",
+            T("Win/Tie/Loss", "胜/平/负"):
+                f"{stats['wins']}/{stats['ties']}/{stats['losses']}" if stats["briefs"] else "—",
+            T("Paired p", "配对 p 值"):
+                (f"{stats['p_value']:.2f}" if stats.get("p_value") is not None
+                 else ("n/a" if stats["briefs"] else "—")),
             T("vs Full Brief Δ", "对比完整 brief Δ"):
                 f"{delta:+.3f}" if delta is not None else "—",
+            T("LOO first/top-3", "LOO 第一/前三"):
+                f"{stats['loo_first']}/{stats['loo_total']} · {stats['loo_top3']}/{stats['loo_total']}"
+                if stats["loo_total"] else "—",
         })
     return pd.DataFrame(rows)
 
@@ -2702,8 +3067,11 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
         T("GPT-5-mini", "GPT-5-mini"),
         T("Task-specific field recipes instead of Full Brief",
           "使用每任务专属字段配方，而非完整 brief"),
-        T("Version B keyword prompt",
-          "关键词使用 B 版 prompt"),
+        T("Version B keyword prompt — the original prompt with the long "
+          "explanations and worked examples removed, but the role, the hard "
+          "rules, the 2-step process and the output format kept",
+          "关键词使用 B 版 prompt —— 在原版基础上删去冗长解释和示例，"
+          "但保留角色、硬规则、两步流程和输出格式"),
         T("Premium models reserved for failed edge cases only",
           "旗舰模型仅用于复核失败的个别边界情况"),
     ]:
@@ -2718,24 +3086,33 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
     # ============================================================
     row = write_section_bar(ws, row,
         T("3. Key findings", "3. 核心发现"), ncols=NCOLS)
-    for finding in [
-        T("GPT-5-mini was not just \"good enough\"; it achieved the best "
-          "average quality / cost tradeoff.",
-          "GPT-5-mini 不只是「够用」；它取得了最佳的平均质量 / 成本平衡。"),
-        T("Premium models usually did not outperform GPT-5-mini on the "
-          "same recipe.",
-          "旗舰模型在同一配方上通常没有超过 GPT-5-mini。"),
-        T("The brief is necessary, but the optimal setup is the right "
-          "subset of fields, not the Full Brief.",
-          "brief 是必要的，但最佳配置是合适的字段子集，不是完整 brief。"),
-        T("product was the strongest single field overall.",
-          "product 是整体最强的单字段。"),
-        T("Version B keyword prompt was 63% shorter while preserving "
-          "near-identical F1.",
-          "B 版关键词 prompt 短了 63%，F1 几乎不变。"),
-    ]:
+    # Findings flagged is_auto=True are computed from the data and rendered bold;
+    # the rest are fixed editorial summaries (normal weight).
+    _topf = _top_single_field(scored) or "product"
+    _kb = _keyword_b_numbers()
+    _b_pct = f"{_kb['pct']}%" if _kb else "63%"
+    findings = [
+        (T("GPT-5-mini was not just \"good enough\"; it achieved the best "
+           "average quality / cost tradeoff.",
+           "GPT-5-mini 不只是「够用」；它取得了最佳的平均质量 / 成本平衡。"), False),
+        (T("Premium models usually did not outperform GPT-5-mini on the "
+           "same recipe.",
+           "旗舰模型在同一配方上通常没有超过 GPT-5-mini。"), False),
+        (T("The brief is necessary, but the optimal setup is the right "
+           "subset of fields, not the Full Brief.",
+           "brief 是必要的，但最佳配置是合适的字段子集，不是完整 brief。"), False),
+        (T(f"{_topf} was the strongest single field overall.",
+           f"{_topf} 是整体最强的单字段。"), True),
+        (T(f"Version B keyword prompt — the original with the long explanations "
+           f"and worked examples removed but the role, hard rules, two-step "
+           f"process and output format kept — was {_b_pct} shorter while "
+           f"preserving near-identical F1.",
+           f"B 版关键词 prompt（在原版基础上删去冗长解释和示例，"
+           f"但保留角色、硬规则、两步流程和输出格式）短了 {_b_pct}，F1 几乎不变。"), True),
+    ]
+    for finding, is_auto in findings:
         _merge_and_write(ws, row, f"• {finding}", ncols=NCOLS,
-                         font=Font(size=11, color="0B0C0C"))
+                         font=Font(size=11, bold=is_auto, color="0B0C0C"))
         ws.row_dimensions[row].height = _estimate_row_height(finding,
                                                               total_width_chars=140)
         row += 1
@@ -2746,25 +3123,21 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
     # ============================================================
     row = write_section_bar(ws, row,
         T("4. Recommended recipes", "4. 推荐配方"), ncols=NCOLS)
-    recipes_df = pd.DataFrame([
-        {T("Task", "任务"): T("Benefit", "利益点"),
-         T("Recommended recipe", "推荐配方"): "audience + differentiators"},
-        {T("Task", "任务"): T("Category", "品类"),
-         T("Recommended recipe", "推荐配方"): "product"},
-        {T("Task", "任务"): T("Concept", "概念"),
-         T("Recommended recipe", "推荐配方"): "brand_strategy"},
-        {T("Task", "任务"): T("Context", "使用情境"),
-         T("Recommended recipe", "推荐配方"): "audience"},
-        {T("Task", "任务"): T("Emotion", "情感"),
-         T("Recommended recipe", "推荐配方"): "brand_strategy + differentiators"},
-        {T("Task", "任务"): T("Features", "特性"),
-         T("Recommended recipe", "推荐配方"): "product"},
-        {T("Task", "任务"): T("Function", "功能"),
-         T("Recommended recipe", "推荐配方"): "product"},
-        {T("Task", "任务"): T("Positioning", "定位"),
-         T("Recommended recipe", "推荐配方"): "audience + differentiators"},
-    ])
-    row = write_df(ws, recipes_df, row)
+    # Auto-computed from the same per-task winner logic as Tab 2 — so Tab 1 can
+    # never drift from Tab 2. Bold columns = values computed live from the data.
+    bpt = _best_per_task_table(scored, raw)
+    task_col = T("Task", "任务")
+    rec_col = T("Recommended recipe", "推荐配方")
+    model_col = T("Model", "模型")
+    if not bpt.empty and task_col in bpt.columns and rec_col in bpt.columns:
+        keep = [task_col, rec_col] + ([model_col] if model_col in bpt.columns else [])
+        recipes_df = bpt[keep].copy()
+        recipes_bold = {2} | ({3} if model_col in bpt.columns else set())
+    else:
+        recipes_df = pd.DataFrame([{task_col: T("(no data)", "（无数据）"),
+                                    rec_col: "—"}])
+        recipes_bold = set()
+    row = write_df(ws, recipes_df, row, bold_cols=recipes_bold)
     row += 2
 
     # ============================================================
@@ -2772,17 +3145,19 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
     # ============================================================
     row = write_section_bar(ws, row,
         T("5. Keyword prompt compression", "5. 关键词 prompt 压缩"), ncols=NCOLS)
+    _b_pct2 = f"{_kb['pct']}%" if _kb else "63%"
     kw_summary = pd.DataFrame([
         {T("Version", "版本"): "A — Full",
          T("Result", "结果"): T("Baseline", "基线")},
         {T("Version", "版本"): "B — Reduced",
-         T("Result", "结果"): T("63% shorter, near-identical F1",
-                                "短 63%，F1 几乎一致")},
+         T("Result", "结果"): T(f"{_b_pct2} shorter, near-identical F1",
+                                f"短 {_b_pct2}，F1 几乎一致")},
         {T("Version", "版本"): "C / D",
          T("Result", "结果"): T("Noticeable quality drop",
                                 "质量明显下降")},
     ])
-    row = write_df(ws, kw_summary, row)
+    # Bold the Result column — the B-row figure is computed live from prompts.txt.
+    row = write_df(ws, kw_summary, row, bold_cols={2})
     row += 1
 
     _merge_and_write(ws, row, T("Removed:", "删去："), ncols=NCOLS,
@@ -2823,7 +3198,9 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
     for d in [
         T("GPT-5-mini", "GPT-5-mini"),
         T("Task-specific recipes", "每任务专属配方"),
-        T("Version B keyword prompt", "B 版关键词 prompt"),
+        T("Version B keyword prompt (long explanations + examples removed; "
+          "role, hard rules, 2-step process, output format kept)",
+          "B 版关键词 prompt（删去长解释和示例，保留角色、硬规则、两步流程和输出格式）"),
     ]:
         _merge_and_write(ws, row, f"• {d}", ncols=NCOLS,
                          font=Font(size=11, color="0B0C0C"))
@@ -2903,10 +3280,13 @@ def build_tab_recommended_configs(wb, scored: pd.DataFrame, raw: pd.DataFrame) -
       6. Operational takeaway (one closing paragraph)
     """
     ws = wb.create_sheet(T("Final Recommendations", "生产推荐"))
-    NCOLS = 7  # main table is 7 cols
+    NCOLS = 12  # main recommendation table is 12 cols
     # Set column widths up front so write_df / row-height heuristics see
     # real widths (not the openpyxl-default 12 placeholder).
-    autosize_cols(ws, {1: 16, 2: 36, 3: 14, 4: 14, 5: 20, 6: 22, 7: 40})
+    autosize_cols(ws, {
+        1: 16, 2: 34, 3: 12, 4: 12, 5: 16, 6: 16,
+        7: 22, 8: 16, 9: 18, 10: 22, 11: 20, 12: 38,
+    })
     row = write_tab_title(ws,
         T("Final Production Recommendations",
           "最终生产推荐"), ncols=NCOLS)
@@ -2983,19 +3363,20 @@ def build_tab_recommended_configs(wb, scored: pd.DataFrame, raw: pd.DataFrame) -
             "Stage A and Stage B API calls across all 23 briefs.",
             "Stage A 和 Stage B 在所有 23 个 brief 上的 API 调用。"),
         scoring=T(
-            "Each row picks the configuration whose quality is essentially "
-            "the same as the highest score on that task, but with lower "
-            "cost or shorter input. Avg score is the mean across the 23 "
-            "briefs.",
-            "每行选择的是：质量和最高分基本一样、但成本更低或输入更短的配置。"
-            "平均分数是 23 个 brief 上的均值。"))
+            "Each row applies the 0.036 cosine noise floor as a hard rule: "
+            "tiny score gaps are ties, and the cheaper/shorter setup wins. "
+            "The table also shows paired brief wins/losses, Full Brief delta, "
+            "and leave-one-brief-out stability.",
+            "每行都把 0.036 余弦噪声阈值作为硬规则：微小分差算打平，"
+            "优先选更便宜/更短的配置。表中同时展示配对胜负、相对完整 brief "
+            "差值和去掉一个 brief 后的稳定性。"))
     table = _best_per_task_table(scored, raw)
     if table.empty:
         _merge_and_write(ws, row, T("No scored data yet.", "暂无打分数据。"),
                          ncols=NCOLS, font=ITALIC_GREY)
         row += 1
     else:
-        rec_col = T("Recipe", "配方")
+        rec_col = T("Recommended recipe", "推荐配方")
         row_fills = []
         for _, r in table.iterrows():
             recipe = str(r.get(rec_col, ""))
@@ -3005,11 +3386,16 @@ def build_tab_recommended_configs(wb, scored: pd.DataFrame, raw: pd.DataFrame) -
                 row_fills.append(GREEN_HIGHLIGHT)
         row = write_df(ws, table, row, row_fills=row_fills)
         _merge_and_write(ws, row,
-            T("Equivalent = within Δ ≤ 0.036 of Full Brief. "
-              "Decision = Ship by default; Ship with review for "
-              "wording-sensitive tasks.",
-              "持平 = 与完整 brief 相差 Δ ≤ 0.036。"
-              "决定 = 默认上线；措辞敏感的任务建议「上线（需抽查）」。"),
+            T(f"Decision bands: Recommended (stable on this sample) = stable LOO "
+              f"AND beats its best peer on the same briefs at the paired test "
+              f"(p < {cfg.PAIRED_TEST_ALPHA}); Cost-priority usable = tied within "
+              f"{cfg.NOISE_FLOOR_COSINE} or lead not confirmed, so pick the "
+              f"cheaper/shorter option; Not recommended = materially below Full "
+              f"Brief or clearly behind. A higher mean alone is never a win.",
+              f"决策分三档：推荐（本样本稳定）= LOO 稳 且 在相同 brief 上的配对检验"
+              f"显著优于次优（p < {cfg.PAIRED_TEST_ALPHA}）；成本优先可用 = "
+              f"在 {cfg.NOISE_FLOOR_COSINE} 内打平或优势未被统计确认，选更便宜/更短的；"
+              f"不推荐 = 明显低于完整 brief 或明显落后。仅平均分更高不算赢。"),
             ncols=NCOLS, font=Font(size=10, italic=True, color="626A6E"))
         row += 2
 
@@ -3658,6 +4044,9 @@ def _human_review_table(scored: pd.DataFrame) -> pd.DataFrame:
         return s if len(s) <= MAX_TEXT else s[:MAX_TEXT] + "…"
 
     HUMAN_PENDING = T("Pending", "待填写")
+    # Carry forward any human ratings already typed into the previous build so a
+    # rebuild never wipes them. Keyed by (model, truncated AI output).
+    existing_human = _existing_human_ratings()
 
     # 8-column table per spec:
     # Task | Recipe | Model | Ground Truth | AI Output | Auto cosine | Sonnet 1-5 | Human 1-5
@@ -3666,18 +4055,133 @@ def _human_review_table(scored: pd.DataFrame) -> pd.DataFrame:
         skey = (r["brief_id"], r["task"], r["config_id"], r["model_key"])
         sonnet_raw = sonnet_lookup.get(skey)
         sonnet_v = sonnet_raw if sonnet_raw not in (None, "—") else "—"
+        ai_out = _truncate(r.get("prediction"))
+        human_v = existing_human.get((str(r["model_key"]), ai_out), HUMAN_PENDING)
         rows.append({
             T("Task", "任务"): T_task(r["task"]),
             T("Recipe", "配方"):
                 T_recipe(humanize_config(r["config_id"])),
             T("Model", "模型"): r["model_key"],
             T("Ground Truth", "人工标准答案"): _truncate(r.get("ground_truth")),
-            T("AI Output", "AI 输出"): _truncate(r.get("prediction")),
+            T("AI Output", "AI 输出"): ai_out,
             T("Auto cosine", "自动余弦"): round(float(r["cosine"]), 3),
             T("Sonnet 1-5", "Sonnet 1-5"): sonnet_v,
-            T("Human 1-5", "人工 1-5"): HUMAN_PENDING,
+            T("Human 1-5", "人工 1-5"): human_v,
         })
     return pd.DataFrame(rows)
+
+
+def _existing_human_ratings() -> dict:
+    """Read hand-entered Human 1-5 scores from the previously-built workbook so
+    a rebuild preserves them instead of resetting the column to 'Pending'.
+
+    Keyed by (model, truncated AI-output text) — both reproduce identically on
+    every build, so the match is stable even if row order shifts. Returns {} if
+    no prior file exists or it can't be read.
+    """
+    path = cfg.RESULTS_DIR / (
+        "Prompt Eval Results (CN).xlsx" if LANG == "zh" else "Prompt Eval Results.xlsx"
+    )
+    out: dict = {}
+    if not path.exists():
+        return out
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception:
+        return out
+    ws = None
+    for nm in ("Human Review", "人工评审"):
+        if nm in wb.sheetnames:
+            ws = wb[nm]
+            break
+    if ws is None:
+        return out
+    # Find header row (contains the Human-rating column header).
+    hdr = None
+    for rr in range(1, 60):
+        for cc in range(1, 12):
+            v = ws.cell(rr, cc).value
+            if isinstance(v, str) and ("Human 1-5" in v or "人工 1-5" in v):
+                hdr = rr
+                break
+        if hdr:
+            break
+    if not hdr:
+        return out
+    # Fixed column layout: Task1 Recipe2 Model3 GT4 AIOut5 cosine6 Sonnet7 Human8
+    MODEL_C, AIOUT_C, HUMAN_C = 3, 5, 8
+    rr = hdr + 1
+    while True:
+        first = ws.cell(rr, 1).value
+        if first in (None, ""):
+            break
+        h = ws.cell(rr, HUMAN_C).value
+        if isinstance(h, (int, float)):
+            model = ws.cell(rr, MODEL_C).value
+            ai = ws.cell(rr, AIOUT_C).value
+            out[(str(model), str(ai))] = int(round(h))
+        rr += 1
+    return out
+
+
+def _weighted_kappa_quadratic(a: list, b: list) -> float:
+    """Cohen's weighted kappa (quadratic weights) — same formula as
+    scripts/compute_kappa.py. Pure-python, no sklearn."""
+    if len(a) != len(b) or not a:
+        return float("nan")
+    cats = sorted(set(a) | set(b))
+    k = len(cats)
+    if k < 2:
+        return 1.0
+    idx = {c: i for i, c in enumerate(cats)}
+    n = len(a)
+    O = [[0] * k for _ in range(k)]
+    for x, y in zip(a, b):
+        O[idx[x]][idx[y]] += 1
+    rt = [sum(r) for r in O]
+    ct = [sum(O[r][c] for r in range(k)) for c in range(k)]
+    E = [[rt[r] * ct[c] / n for c in range(k)] for r in range(k)]
+    dw = (k - 1) ** 2
+    W = [[((i - j) ** 2) / dw for j in range(k)] for i in range(k)]
+    num = sum(W[i][j] * O[i][j] for i in range(k) for j in range(k))
+    den = sum(W[i][j] * E[i][j] for i in range(k) for j in range(k))
+    return float("nan") if den == 0 else 1 - num / den
+
+
+def _human_sonnet_kappa(scored: pd.DataFrame):
+    """Real Human ↔ Sonnet weighted kappa from the (preserved) Human 1-5 column.
+
+    Returns (n_pairs, kappa) when at least 5 numeric Human/Sonnet pairs exist,
+    else None. Also writes outputs/kappa.json so Tab 1 and the standalone
+    compute_kappa path stay in sync.
+    """
+    hr = _human_review_table(scored)
+    if hr.empty:
+        return None
+    son_c = T("Sonnet 1-5", "Sonnet 1-5")
+    hum_c = T("Human 1-5", "人工 1-5")
+    a, b = [], []
+    for _, row in hr.iterrows():
+        s, h = row.get(son_c), row.get(hum_c)
+        if isinstance(s, (int, float)) and isinstance(h, (int, float)):
+            a.append(int(round(s)))
+            b.append(int(round(h)))
+    if len(a) < 5:
+        return None
+    kappa = _weighted_kappa_quadratic(a, b)
+    if kappa != kappa:  # NaN
+        return None
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+        decision = "HIGH" if kappa >= 0.7 else "MEDIUM" if kappa >= 0.4 else "LOW"
+        (cfg.OUTPUTS_DIR / "kappa.json").write_text(_json.dumps({
+            "kappa": round(kappa, 4), "n_pairs": len(a), "decision": decision,
+            "timestamp": _dt.now().isoformat(timespec="seconds"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return (len(a), kappa)
 
 
 def _kappa_summary_line() -> str:
@@ -3703,6 +4207,13 @@ def _kappa_summary_line() -> str:
             return T(
                 "Agreement file present but no value found.",
                 "一致性文件存在，但未找到数值。")
+        if n is None or int(n) < 30:
+            return T(
+                f"AI judge is not yet human-validated: only {n or 0} paired "
+                "human scores are available. Treat Sonnet judge outputs as "
+                "supporting evidence only.",
+                f"AI 评审尚未通过人工一致性验证：目前只有 {n or 0} 条人工配对评分。"
+                "Sonnet 评审结果只能作为辅助参考。")
         if kappa >= 0.7:
             verdict = T("strong agreement", "高度一致")
         elif kappa >= 0.4:
@@ -3710,8 +4221,11 @@ def _kappa_summary_line() -> str:
         else:
             verdict = T("low agreement", "一致性较低")
         return T(
-            f"Rating agreement on {n} samples: {verdict} (score {kappa:.2f}, 0 to 1 scale).",
-            f"{n} 条样本上的评分一致性：{verdict}（分数 {kappa:.2f}，0 到 1 范围）。")
+            f"Human ↔ AI rating agreement on {n} samples: {verdict} "
+            f"(score {kappa:.2f}, 0 to 1 scale). 60 samples is preferred "
+            "before relying on the AI judge as a production scorer.",
+            f"{n} 条样本上的人工 ↔ AI 评分一致性：{verdict}（分数 {kappa:.2f}，0 到 1 范围）。"
+            "若要把 AI 评审作为生产评分器，建议做到 60 条样本。")
     except Exception as e:
         return T(
             f"Could not read agreement file ({e}).",
@@ -3913,16 +4427,29 @@ def build_tab_analysis(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
     if not df.empty:
         row = write_df(ws, df, row)
     row += 1
+    _sent = scored[scored["cosine"].notna()] if not scored.empty else scored
+    _gm = (float(_sent[_sent["model_key"] == "gpt5mini"]["cosine"].mean())
+           if not _sent.empty else float("nan"))
+    _gm_str = f"{_gm:.3f}" if _gm == _gm else "n/a"  # NaN-safe
+    _n_briefs = int(_sent["brief_id"].nunique()) if not _sent.empty else 0
+    _cost_clause = (
+        T("exact cost advantage remains provisional until model prices are verified.",
+          "精确成本优势需等模型价格确认后再写死。")
+        if not getattr(cfg, "PRICES_VERIFIED", False)
+        else T("cost advantage is confirmed against verified prices.",
+               "成本优势已对照已核实价格确认。")
+    )
     _conclusion(T(
-        "GPT-5-mini has the highest average cosine of any model on this "
-        "dataset (0.603) and is roughly 80x cheaper per call than Opus 4.7. "
-        "Default-model decision is right.",
-        "GPT-5-mini 在本数据上的平均余弦最高（0.603），"
-        "每次调用成本约为 Opus 4.7 的 1/80。默认模型决策正确。"))
+        f"On these {_n_briefs} briefs, GPT-5-mini has the highest average "
+        f"cosine of any model tested ({_gm_str}). The default-model choice is "
+        f"quality-led on this sample; {_cost_clause}",
+        f"在这 {_n_briefs} 个 brief 上，GPT-5-mini 平均余弦最高（{_gm_str}）。"
+        f"默认模型选择在本样本上主要基于质量；{_cost_clause}"))
     _implication(T(
-        "GPT-5-mini is the production-default model — no premium upgrade "
-        "needed by default.",
-        "GPT-5-mini 即为生产默认模型 —— 默认情况下不需要升级到旗舰。"))
+        "On this sample GPT-5-mini is the production-default — no premium "
+        "upgrade is needed by default. Re-confirm if prices or briefs change.",
+        "在本样本上 GPT-5-mini 为生产默认 —— 默认无需升级到旗舰。"
+        "价格或 brief 变化后需重新确认。"))
 
     row = write_section_bar(ws, row,
         T("A2. Premium vs cheap on the same recipe",
@@ -3932,16 +4459,15 @@ def build_tab_analysis(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
         row = write_df(ws, df, row)
     row += 1
     _conclusion(T(
-        "Premium delivers a real gain on 1 of 8 tasks (feature_relevant). "
-        "On the other 7, premium models are WORSE on the same recipe. "
-        "Premium n = 24 per task, so the magnitude is noisy but the "
-        "direction is unambiguous.",
-        "旗舰仅在 8 个任务中的 1 个（feature_relevant）带来实质提升。"
-        "其他 7 个任务上，旗舰模型在同一配方上反而更差。"
-        "旗舰每任务 n=24，幅度有噪声但方向毫不含糊。"))
+        "Premium models were checked only on 3 representative briefs. The "
+        "observed direction does not justify a default premium upgrade, but "
+        "it is not a full 23-brief validation.",
+        "旗舰模型只在 3 个代表性 brief 上做了检查。当前方向不支持默认升级到旗舰，"
+        "但这不是覆盖全部 23 个 brief 的完整验证。"))
     _implication(T(
-        "Premium models should not be used as the default production tier.",
-        "旗舰模型不应作为默认生产层。"))
+        "Keep cheap-tier as default; run full 23-brief premium validation only "
+        "if a task needs a higher quality ceiling.",
+        "默认保留便宜层；只有任务确实需要更高质量上限时，再做完整 23 个 brief 的旗舰验证。"))
 
     row = write_section_bar(ws, row,
         T("A3. Brief vs No Brief — does the brief help?",
@@ -4079,13 +4605,14 @@ def build_tab_analysis(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
     if not df.empty:
         row = write_df(ws, df, row)
     row += 1
+    _hk_rl = _model_rate_limit_pct(raw, "haiku")
     _conclusion(T(
-        "Haiku rate-limited on ~46% of calls — confirms why the cheap-tier "
-        "default is GPT-5-mini, not Haiku. Retry layer caught these "
-        "(eventually got ok rows from the same resume keys) but at half "
-        "the throughput.",
-        "Haiku 约 46% 的调用被限流 —— 这证实了为什么便宜层默认是 GPT-5-mini 而不是 Haiku。"
-        "重试层把它们都接住了（最终从同样的 resume key 拿到 ok 行），但吞吐量只有一半。"))
+        f"Haiku ended rate-limited on {_hk_rl:.0f}% of calls — supports why the "
+        f"cheap-tier default is GPT-5-mini, not Haiku. The retry layer caught "
+        f"these (eventually got ok rows from the same resume keys) but at lower "
+        f"throughput.",
+        f"Haiku 有 {_hk_rl:.0f}% 的调用最终被限流 —— 支持为什么便宜层默认是 GPT-5-mini 而不是 Haiku。"
+        f"重试层把它们都接住了（最终从同样的 resume key 拿到 ok 行），但吞吐量更低。"))
     _implication(T(
         "GPT-5-mini is the operational default; do not fall back to Haiku "
         "without a retry strategy.",
@@ -4243,43 +4770,74 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
                      if v not in ("Pending", "待填写")) if not hr_df.empty else 0
     n_total = sample_count
 
-    # Real Sonnet-vs-cosine kappa across the whole AI-judge dataset.
-    # This is the only κ we can actually compute today — Human ↔ Sonnet
-    # requires the Human 1-5 column to be filled first.
-    n_pairs, sanity_kappa = _sonnet_vs_cosine_kappa()
+    # Prefer the REAL Human ↔ Sonnet kappa once the human column is filled.
+    # Fall back to the Sonnet-vs-cosine sanity check only when there are too
+    # few human ratings to compute it.
+    human_kappa = _human_sonnet_kappa(scored)
 
-    # Agreement summary. Honest framing: human ratings are pending, so
-    # the only kappa we can compute today is Sonnet vs cosine-bin
-    # (an AI-internal sanity check, NOT human validation). Label it
-    # accordingly so a reader does not assume humans have rated.
-    if sanity_kappa is not None and n_pairs >= 5:
-        kappa_str = f"{sanity_kappa:.2f}  (Sonnet vs cosine-bin sanity check)"
-        if sanity_kappa >= 0.7:
-            interp_str = T("High agreement (sanity check only)",
-                            "高度一致（仅健全性检查）")
-        elif sanity_kappa >= 0.4:
-            interp_str = T("Moderate agreement (sanity check only)",
-                            "中等一致（仅健全性检查）")
+    if human_kappa is not None:
+        n_hk, k = human_kappa
+        kappa_str = T(f"{k:.2f}  (Human ↔ Sonnet, {n_hk} paired ratings)",
+                       f"{k:.2f}（人工 ↔ Sonnet，{n_hk} 对评分）")
+        if k >= 0.7:
+            interp_str = T("High agreement — AI judge aligns with humans",
+                            "高度一致 —— AI 评委与人工判断吻合")
+        elif k >= 0.4:
+            interp_str = T("Moderate agreement", "中等一致")
         else:
-            interp_str = T("Low agreement (sanity check only)",
-                            "一致性较低（仅健全性检查）")
-        decision_str = T(
-            "Current κ is Sonnet-vs-cosine sanity check, not final human "
-            "validation. Human validation pending — fill the Human 1-5 "
-            "column above to compute Human ↔ Sonnet κ.",
-            "当前 κ 是 Sonnet ↔ 余弦的健全性检查，不是最终的人工验证。"
-            "人工验证尚未完成 —— 填上方「人工 1-5」列后即可计算人工 ↔ Sonnet 的 κ。")
+            interp_str = T("Low agreement — do not rely on the AI judge",
+                            "一致性低 —— 不要依赖 AI 评委")
+        if n_hk < 30:
+            decision_str = T(
+                f"Based on {n_hk} human ratings (below the 30 minimum) — treat "
+                f"as preliminary; collect to at least 30 (60 preferred).",
+                f"基于 {n_hk} 条人工评分（未达 30 条最低门槛）—— 仅作初步参考；"
+                f"建议补到至少 30 条（最好 60 条）。")
+        elif n_hk < 60:
+            decision_str = T(
+                f"{n_hk} human ratings (≥30): if κ≥0.7 the AI judge may be used "
+                f"as a supporting scorer; 60 ratings preferred before full "
+                f"operational reliance.",
+                f"{n_hk} 条人工评分（≥30）：若 κ≥0.7，AI 评委可作辅助打分器；"
+                f"全面依赖前建议补到 60 条。")
+        else:
+            decision_str = T(
+                f"{n_hk} human ratings (≥60): publication-grade validation. "
+                f"Use the κ band above to decide the AI judge's role.",
+                f"{n_hk} 条人工评分（≥60）：达到发表级验证。"
+                f"按上面的 κ 区间决定 AI 评委的角色。")
     else:
-        kappa_str = T("Pending", "待计算")
-        interp_str = T("Pending", "待评定")
-        decision_str = T("Pending", "待决策")
+        # No human ratings yet — show the Sonnet-vs-cosine sanity check, clearly
+        # labelled as NOT human validation.
+        n_pairs, sanity_kappa = _sonnet_vs_cosine_kappa()
+        if sanity_kappa is not None and n_pairs >= 5:
+            kappa_str = f"{sanity_kappa:.2f}  (Sonnet vs cosine-bin sanity check)"
+            if sanity_kappa >= 0.7:
+                interp_str = T("High agreement (sanity check only)",
+                                "高度一致（仅健全性检查）")
+            elif sanity_kappa >= 0.4:
+                interp_str = T("Moderate agreement (sanity check only)",
+                                "中等一致（仅健全性检查）")
+            else:
+                interp_str = T("Low agreement (sanity check only)",
+                                "一致性较低（仅健全性检查）")
+            decision_str = T(
+                "Current κ is Sonnet-vs-cosine sanity check, not final human "
+                "validation. Human validation pending — fill the Human 1-5 "
+                "column above to compute Human ↔ Sonnet κ.",
+                "当前 κ 是 Sonnet ↔ 余弦的健全性检查，不是最终的人工验证。"
+                "人工验证尚未完成 —— 填上方「人工 1-5」列后即可计算人工 ↔ Sonnet 的 κ。")
+        else:
+            kappa_str = T("Pending", "待计算")
+            interp_str = T("Pending", "待评定")
+            decision_str = T("Pending", "待决策")
 
     summary_df = pd.DataFrame([
         {T("Metric", "指标"):
              T("Human-reviewed samples", "人工评审样本"),
          T("Result", "结果"):
-             f"0 of {n_total} (pending)" if LANG == "en"
-             else f"{n_total} 条中已评 0 条（待评审）"},
+             f"{human_done} of {n_total} ({'pending' if human_done < 30 else 'minimum met'})" if LANG == "en"
+             else f"{n_total} 条中已评 {human_done} 条（{'未达 30 条' if human_done < 30 else '已达最低门槛'}）"},
         {T("Metric", "指标"):
              T("Agreement metric", "一致性指标"),
          T("Result", "结果"):
@@ -4428,11 +4986,11 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
           "scores were not single-run luck. Total 1,904 API calls.",
           "Stage B。把每个任务的 top 2 配方再多跑两次，确认分数不是单次运气。"
           "共 1,904 次 API 调用。"),
-        T("Phase 4. Run the four stronger models only on the surviving top "
-          "recipes. 108 API calls. Total premium tier spend stayed under one "
-          "British pound.",
-          "Phase 4。仅在幸存的 top 配方上跑四个更强的模型。108 次 API 调用。"
-          "旗舰层总花费控制在一英镑以内。"),
+        T("Phase 4. Small-sample premium check: run the four stronger models "
+          "only on surviving top recipes and 3 representative briefs. Use this "
+          "as directional evidence only.",
+          "Phase 4。小样本旗舰检查：仅在幸存 top 配方和 3 个代表性 brief 上运行四个更强模型。"
+          "这只能作为方向参考。"),
         T("Tie-break rule. When two recipes differ by less than 0.036 cosine, "
           "default to the cheaper, shorter, or simpler one.",
           "平局规则。两个配方差值小于 0.036 余弦时，默认选更便宜、更短或更简单的那个。"),
@@ -4593,19 +5151,20 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
         "The top recipes are re-run two extra times...", total_width_chars=140)
     row += 2
 
-    # Rule 6 — when to trust the AI judge (3-band κ table)
+    # Rule 6 — when the AI judge can be used (3-band κ table)
     _merge_and_write(ws, row,
-        T("Rule 6. When to trust the AI judge "
-          "(agreement against 30 human-rated samples)",
-          "规则 6. 何时信任 AI 评审（与 30 条人工评分样本的一致性）"),
+        T("Rule 6. When the AI judge can be used "
+          "(minimum 30 human-rated pairs; 60 preferred)",
+          "规则 6. AI 评审何时可用（至少 30 条人工配对；建议 60 条）"),
         ncols=NCOLS, font=Font(size=11, bold=True, color="0B0C0C"))
     row += 1
     kappa_band_df = pd.DataFrame([
         {T("Agreement score", "一致性分数"):
              T("≥ 0.7", "≥ 0.7"),
          T("Decision", "决策"):
-             T("High agreement. Trust the AI judge across the remaining ~6,500 calls.",
-               "高度一致。AI 评审可信，覆盖剩余约 6,500 次调用。")},
+             T("High agreement. AI judge may be used as supporting scorer; "
+               "prefer 60 human pairs before relying on it operationally.",
+               "高度一致。AI 评审可作为辅助评分器；正式依赖前建议做到 60 条人工配对。")},
         {T("Agreement score", "一致性分数"):
              T("0.4 to 0.7", "0.4 到 0.7"),
          T("Decision", "决策"):
@@ -4619,8 +5178,10 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
     ])
     row = write_df(ws, kappa_band_df, row)
     _merge_and_write(ws, row,
-        T("Agreement is measured by Cohen's weighted κ (Landis & Koch 1977 bands).",
-          "一致性用 Cohen 加权 κ 计算（Landis & Koch 1977 的分段标准）。"),
+        T("Until Human ↔ Sonnet κ is computed on at least 30 paired scores, "
+          "the AI judge is not validated and its ratings are reference-only.",
+          "在至少 30 条人工 ↔ Sonnet 配对评分计算出 κ 之前，AI 评审尚未被验证，"
+          "其评分只能作为参考。"),
         ncols=NCOLS, font=Font(size=10, italic=True, color="626A6E"))
     row += 2
 
@@ -4694,17 +5255,13 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
         T("Premium-model quality ceiling. Phase 4.",
           "旗舰模型质量上限。Phase 4。"), ncols=NCOLS)
     _merge_and_write(ws, row,
-        T("Headline reading: on 7 of 8 sentence tasks, the premium tier "
-          "(Opus 4.7 / GPT-5.5) scored at or below the cheap tier on the "
-          "same recipe. The one exception is feature_relevant, where Opus "
-          "4.7 gains about +0.046 cosine — visible but not worth the ~80x "
-          "cost on the default. Premium n is small (24 cells per task) so "
-          "treat the magnitudes as directional; the direction is consistent.",
-          "核心结论：在 8 个句子型任务中的 7 个上，"
-          "旗舰层（Opus 4.7 / GPT-5.5）在同一配方上的分数与便宜层持平或更低。"
-          "唯一例外是 feature_relevant，Opus 4.7 比便宜层高约 +0.046 余弦 —— "
-          "可见但远不值得 ~80 倍的默认成本。"
-          "旗舰层每任务样本数较小（24 个单元格），数值仅作方向参考；方向是一致的。"),
+        T("Phase 4 is a small-sample premium-model check: it was run only "
+          "on 3 representative briefs, not across all 23 briefs. Treat every "
+          "premium-model result here as directional evidence, not a validated "
+          "production decision.",
+          "Phase 4 是小样本旗舰模型检查：只在 3 个代表性 brief 上运行，"
+          "不是覆盖全部 23 个 brief。此处所有旗舰模型结果都只能作为方向参考，"
+          "不能当作已验证的生产决策。"),
         ncols=NCOLS, font=Font(size=10, color="0B0C0C"))
     ws.row_dimensions[row].height = _estimate_row_height(
         "Headline reading: on 7 of 8 sentence tasks...", total_width_chars=140)
@@ -4715,18 +5272,18 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
     if not prem_df.empty:
         row = _emit_table_meta(ws, row, NCOLS,
             source=T(
-                "The top winner per task was re-run on Opus 4.7 and GPT-5.5 "
-                "in the premium tier, and Sonnet 4.6 and GPT-5 in the medium "
-                "tier. Total premium tier spend stayed under one British pound.",
-                "每个任务的 top winner 在旗舰层 Opus 4.7 和 GPT-5.5 上重跑，"
-                "并在中端层 Sonnet 4.6 和 GPT-5 上重跑。旗舰层总花费控制在一英镑以内。"),
+                "The top winner per task was re-run on a curated 3-brief subset "
+                "with Opus 4.7 / GPT-5.5 in the premium tier and Sonnet 4.6 / "
+                "GPT-5 in the medium tier.",
+                "每个任务的 top winner 只在 3 个代表性 brief 子集上重跑，"
+                "使用旗舰层 Opus 4.7 / GPT-5.5 和中端层 Sonnet 4.6 / GPT-5。"),
             scoring=T(
-                "Each cell is the mean cosine across 23 briefs for that "
-                "model and recipe. The headline answer is whether premium "
-                "models score meaningfully higher than cheap-tier models on "
-                "the same recipe.",
-                "每个单元格是该模型和配方在 23 个 brief 上的平均余弦。"
-                "核心问题是旗舰模型在同一配方上的分数是否显著高于便宜层。"))
+                "Each cell is the mean over the curated Phase 4 briefs actually "
+                "run for that model and recipe. Because n=3 briefs, use the "
+                "result only to decide whether a full 23-brief premium validation "
+                "is worth running.",
+                "每个单元格是该模型和配方在实际运行的 Phase 4 代表性 brief 上的均值。"
+                "由于 n=3 个 brief，只能用于判断是否值得再做完整 23 个 brief 的旗舰验证。"))
         best_prem_col = T("Best premium", "旗舰最佳")
         if best_prem_col in prem_df.columns:
             premium_scores = prem_df[best_prem_col].dropna()
@@ -4768,8 +5325,11 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
                 "公式：输入 token 数乘输入单价，加输出 token 数乘输出单价。"),
             scoring=T(
                 "Each row is the sum of all API calls in that stage. The "
-                "Total row shows project spend against the 50 pound cap.",
-                "每行是该阶段所有 API 调用的总和。Total 行显示项目花费与 50 英镑上限的对比。"))
+                "Total row shows project spend against the 50 pound cap. "
+                "Cost-quality recommendations remain provisional until model "
+                "IDs and input/output token prices are verified and dated.",
+                "每行是该阶段所有 API 调用的总和。Total 行显示项目花费与 50 英镑上限的对比。"
+                "模型 ID 和输入/输出 token 单价确认并写明价格日期前，成本质量建议都只是暂定。"))
         row = write_df(ws, cost_df, row)
         total = float(raw["cost_usd"].sum())
         write_cell(ws, row, 1, T("Total", "合计"),
@@ -4784,8 +5344,10 @@ def build_tab_appendix(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> None:
         row += 1
         _merge_and_write(ws, row,
             T("Total spend stayed well under the 50 pound project cap. "
-              "Premium tier spend stayed under the explicit 1 pound ceiling.",
-              "总支出远低于 50 英镑项目上限。旗舰层支出控制在明确的 1 英镑上限以内。"),
+              "Before publishing any cost-quality claim, verify the model IDs, "
+              "input/output token prices, and price version date in src/config.py.",
+              "总支出远低于 50 英镑项目上限。发布任何成本质量结论前，"
+              "必须先确认 src/config.py 中的模型 ID、输入/输出 token 单价和价格版本日期。"),
             ncols=NCOLS, font=Font(size=10, italic=True, color="626A6E"))
         row += 1
 
@@ -4826,6 +5388,11 @@ def main():
     from src.utils import read_jsonl
     raw_records = read_jsonl(cfg.OUTPUTS_DIR / "results.jsonl")
     raw = pd.DataFrame(raw_records) if raw_records else scored
+
+    # Refresh Human ↔ Sonnet kappa.json up front (reads back any human ratings
+    # preserved from the previous build) so Tab 1's agreement line is current in
+    # this same build, not one build behind.
+    _human_sonnet_kappa(scored)
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)

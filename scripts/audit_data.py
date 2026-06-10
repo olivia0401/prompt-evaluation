@@ -110,6 +110,25 @@ from src.config import (
     STAGE_B_STD_CEIL,
 )
 
+PAIRED_TEST_ALPHA = getattr(cfg, "PAIRED_TEST_ALPHA", 0.05)
+
+
+def _sign_test_p(wins: int, losses: int) -> float | None:
+    """Two-sided sign test p-value (exact binomial, stdlib only).
+
+    Tests whether the winner beats the runner-up on the SAME briefs more often
+    than chance. Ties are excluded by the caller. Returns None when there are
+    too few decisive briefs (n < 6) to say anything.
+    """
+    import math
+    n = wins + losses
+    if n < 6:
+        return None
+    k = min(wins, losses)
+    # two-sided: 2 × P(X ≤ k) under Binomial(n, 0.5), capped at 1.0
+    tail = sum(math.comb(n, i) for i in range(0, k + 1)) / (2.0 ** n)
+    return float(min(1.0, 2.0 * tail))
+
 # Audit-only constant — kept here because no other module needs it.
 KEYWORD_COUNT_TARGET = 10
 # Stage A target: 23 briefs × (Phase 1+2+3 configs ~142) × 2 cheap models.
@@ -416,6 +435,45 @@ def check_statistical_adequacy(results: list, scored_df: pd.DataFrame | None) ->
              not weak_winners,
              f"{len(weak_winners)}/{n_evaluated} tasks tied within noise: " + ", ".join(weak_winners[:5])
              if weak_winners else f"all {n_evaluated} winners are above noise",
+             warn_only=True)
+
+    # D4 — paired significance: a higher MEAN is not a win. For each task,
+    # compare the top-2 cells per-brief (same briefs) with a sign test and flag
+    # any task whose nominal winner is not significantly better (p ≥ alpha).
+    if not sent.empty and "brief_id" in sent.columns:
+        cell_means = sent.groupby(["task", "config_id", "model_key"])["cosine"].mean()
+        not_significant = []
+        n_tested = 0
+        for task, g in cell_means.groupby("task"):
+            srt = g.sort_values(ascending=False)
+            if len(srt) < 2:
+                continue
+            (w_cfg, w_mdl) = srt.index[0][1], srt.index[0][2]
+            (p_cfg, p_mdl) = srt.index[1][1], srt.index[1][2]
+            tt = sent[sent["task"] == task]
+            w = tt[(tt["config_id"] == w_cfg) & (tt["model_key"] == w_mdl)] \
+                .groupby("brief_id")["cosine"].mean()
+            p = tt[(tt["config_id"] == p_cfg) & (tt["model_key"] == p_mdl)] \
+                .groupby("brief_id")["cosine"].mean()
+            paired = pd.concat([w, p], axis=1, join="inner").dropna()
+            if paired.shape[0] < 6:
+                continue
+            n_tested += 1
+            diff = paired.iloc[:, 0] - paired.iloc[:, 1]
+            wins = int((diff > 0).sum())
+            losses = int((diff < 0).sum())
+            pval = _sign_test_p(wins, losses)
+            if pval is None or pval >= PAIRED_TEST_ALPHA:
+                not_significant.append(
+                    f"{task}(p={pval:.2f})" if pval is not None else f"{task}(p=n/a)")
+        _add(results, "D4",
+             f"Each task winner beats runner-up on same briefs (sign test "
+             f"p < {PAIRED_TEST_ALPHA})",
+             not not_significant,
+             (f"{len(not_significant)}/{n_tested} task winners not statistically "
+              f"confirmed — report as 'stable on sample', not 'best': "
+              + ", ".join(not_significant[:6]))
+             if not_significant else f"all {n_tested} task winners are significant",
              warn_only=True)
 
 

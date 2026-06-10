@@ -19,10 +19,12 @@ import openpyxl
 from src import config as cfg
 
 XLSX_PATH = cfg.RESULTS_DIR / "Prompt Eval Results.xlsx"
-SHEET_NAME = "Appendix"
+# The human-review table lives on the "Human Review" tab (was "Appendix" in an
+# older layout; "人工评审" in the Chinese workbook). Try all known names.
+SHEET_NAME_CANDIDATES = ["Human Review", "人工评审", "Appendix"]
 SONNET_COL = 7   # column G — "Sonnet 1-5"
 HUMAN_COL = 8    # column H — "Human 1-5"
-HUMAN_HEADER_TEXT = "Human 1-5"
+HUMAN_HEADER_CANDIDATES = ["Human 1-5", "人工 1-5"]
 
 
 def _cohen_weighted_kappa(rater_a: list[int], rater_b: list[int]) -> float:
@@ -70,26 +72,30 @@ def main():
         raise SystemExit(f"Missing {XLSX_PATH}. Run `python -m scripts.build_xlsx` first.")
 
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
-    if SHEET_NAME not in wb.sheetnames:
-        raise SystemExit(f"Sheet '{SHEET_NAME}' not found in {XLSX_PATH}.")
-    ws = wb[SHEET_NAME]
+    sheet_name = next((s for s in SHEET_NAME_CANDIDATES if s in wb.sheetnames), None)
+    if sheet_name is None:
+        raise SystemExit(
+            f"None of {SHEET_NAME_CANDIDATES} found in {XLSX_PATH}. "
+            f"Tabs present: {wb.sheetnames}"
+        )
+    ws = wb[sheet_name]
 
     # Locate the header row by searching for the Human-rating column header.
-    # Search a wider row range because the table is below several other sections
-    # in the Appendix tab.
+    # Search a wider row range because the table sits below several other
+    # sections on the tab.
     header_row = None
     for r in range(1, 60):
         for c in range(1, 12):
             val = ws.cell(r, c).value
-            if isinstance(val, str) and HUMAN_HEADER_TEXT in val:
+            if isinstance(val, str) and any(h in val for h in HUMAN_HEADER_CANDIDATES):
                 header_row = r
                 break
         if header_row:
             break
     if not header_row:
         raise SystemExit(
-            f"Couldn't find the '{HUMAN_HEADER_TEXT}' header in the "
-            f"'{SHEET_NAME}' tab. Did the workbook structure change?"
+            f"Couldn't find a human-rating header {HUMAN_HEADER_CANDIDATES} in "
+            f"the '{sheet_name}' tab. Did the workbook structure change?"
         )
 
     # Collect paired scores starting just below the header
@@ -108,9 +114,10 @@ def main():
 
     n_pairs = len(sonnet_scores)
     print(f"Found {n_pairs} rows with BOTH human and AI-scorer scores.")
-    if n_pairs < 10:
-        print("Need at least 10 paired scores to compute a reliable agreement score.")
-        print("Fill more rows in Tab 3 col 8 (Human Score) and re-run.")
+    if n_pairs < 30:
+        print("Need at least 30 paired scores before treating agreement as reliable.")
+        print("60 paired scores is preferred for publication-grade validation.")
+        print("Fill more rows in the Human Review tab's Human 1-5 column and re-run.")
         return
 
     kappa = _cohen_weighted_kappa(sonnet_scores, human_scores)
