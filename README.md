@@ -32,12 +32,16 @@ Each stage ends at a STOP gate that prints the deliverable URLs and the audit re
 - **9 tasks** — 8 one-sentence extraction tasks + 1 keyword task (extract 10 terms).
 - **~142 recipes** — which brief fields to feed the prompt (full brief, no brief,
   single fields, field pairs) + 4 keyword-prompt versions (A/B/C/D).
-- **6 models, 3 tiers** — cheap (haiku, gpt5mini), medium (sonnet, gpt5),
-  premium (opus47, gpt55).
+- **6 models across 3 cost tiers** — cheap / medium / premium, spanning OpenAI and
+  Anthropic. Exact model IDs are pinned in `src/config.py` and confirmed with
+  `scripts/verify_models.py` before any cost claim is published.
 
 ## Scoring & statistics
 
 - **Sentence tasks**: embedding cosine vs ground truth (primary) + ROUGE-L + length compliance.
+  Embeddings use OpenAI `text-embedding-3-large` when `OPENAI_API_KEY` is set; with no key
+  the client auto-falls back to local `sentence-transformers/all-mpnet-base-v2` so scoring
+  still runs offline (scores stay comparable within a run, not across backends).
 - **Keyword task**: precision / recall / F1 on Porter-stemmed term sets.
 - **Noise floor** (`NOISE_FLOOR_COSINE`): 2σ of within-cell rerun cosine, re-measured
   across several briefs via `measure_noise.py`. Differences below it are ties.
