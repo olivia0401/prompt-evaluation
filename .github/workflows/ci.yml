@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      # The live tests in test_llm_client_live.py call real LLM APIs and need
+      # secret keys, which CI intentionally does not have. They self-skip when
+      # no key is present, but we ignore the file outright so CI is fully
+      # deterministic and never depends on an external API.
+      - name: Run unit tests
+        run: python -m pytest --ignore=tests/test_llm_client_live.py -q
