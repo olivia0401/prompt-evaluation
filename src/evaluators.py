@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -295,6 +296,9 @@ class EmbeddingClient:
 
     Primary backend: OpenAI text-embedding-3-large (3072 dim).
     Fallback: sentence-transformers/all-mpnet-base-v2 (768 dim, local).
+    When no OpenAI key is provided the client auto-selects the local fallback
+    (use_fallback defaults to None = auto) so scoring never hard-fails on a
+    missing key.
 
     Cache is keyed by (model, text) -> list[float]. File format is JSONL,
     one entry per line, append-only and resilient to interruption.
@@ -311,10 +315,24 @@ class EmbeddingClient:
         api_key: Optional[str] = None,
         model: str = "text-embedding-3-large",
         cache_path: Optional[Path] = None,
-        use_fallback: bool = False,
+        use_fallback: Optional[bool] = None,
     ):
         self.api_key = api_key
         self.model = model
+        # use_fallback tri-state:
+        #   None  -> auto: use the local model only when no OpenAI key is available,
+        #            so scoring degrades gracefully instead of crashing.
+        #   True  -> force the local sentence-transformers backend.
+        #   False -> force the OpenAI backend (raises later if the key is missing).
+        if use_fallback is None:
+            use_fallback = not bool(api_key)
+            if use_fallback:
+                print(
+                    "[EmbeddingClient] OPENAI_API_KEY not set; falling back to local "
+                    "sentence-transformers/all-mpnet-base-v2 (768 dim). Scores are still "
+                    "comparable within a run, but not across OpenAI vs local backends.",
+                    file=sys.stderr,
+                )
         self.use_fallback = use_fallback
         self._client = None
         self._fallback = None

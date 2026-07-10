@@ -5,17 +5,17 @@ Pattern adapted from 毕设/250038039/experiments/analyze_final_results.py
 
 Reads:
   outputs/results.jsonl   (raw call results — produced by run_experiment.py)
-  outputs/scored.csv      (per-call metrics — produced by scoring pipeline, TODO)
+  outputs/scored.csv      (per-call metrics — produced by the scoring pipeline below)
 
 Writes:
-  outputs/scored.csv               (if running --score)  TODO
+  outputs/scored.csv               (if running --score)
   outputs/summary_by_config.csv    (mean / std cosine per task × config_id × model)
   outputs/cost_summary.csv         (cost per stage / model / phase)
   outputs/plots/*.png              (bar charts + heatmap)
 
 Usage:
   python -m scripts.analyze --counts     # quick: status / token / cost rollup from JSONL
-  python -m scripts.analyze --score      # TODO: run evaluator on raw outputs
+  python -m scripts.analyze --score      # run evaluators on raw outputs -> scored.csv
   python -m scripts.analyze --summarize  # build summary_by_config.csv + plots
 """
 import argparse
@@ -410,7 +410,7 @@ def cmd_score():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--counts", action="store_true", help="Quick rollup from JSONL")
-    ap.add_argument("--score", action="store_true", help="Run evaluators -> scored.csv (TODO)")
+    ap.add_argument("--score", action="store_true", help="Run evaluators -> scored.csv")
     ap.add_argument("--summarize", action="store_true", help="Build summary_by_config.csv + plots")
     args = ap.parse_args()
 
