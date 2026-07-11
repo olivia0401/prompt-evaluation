@@ -1,0 +1,43 @@
+name: Eval gate
+
+# Release gate: fail if eval quality regressed vs service/eval_baseline.json.
+#
+# Scoring needs real API calls + the confidential briefs.yml, so this does NOT
+# score in CI. It runs the gate against a scored.csv you produce in your release
+# pipeline (or locally) and hand to this workflow as an artifact/commit. When no
+# scored.csv is present the job self-skips (green) so it never blocks unrelated
+# pushes — wire it into your actual release pipeline where scored.csv exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scored_path:
+        description: Path to scored.csv to gate on
+        default: outputs/scored.csv
+        required: false
+  pull_request:
+
+jobs:
+  gate:
+    name: Eval regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-service.txt
+
+      - name: Run eval gate
+        run: |
+          SCORED="${{ github.event.inputs.scored_path || 'outputs/scored.csv' }}"
+          if [ -f "$SCORED" ]; then
+            python -m service.ci_gate --scored "$SCORED"
+          else
+            echo "No $SCORED present — skipping gate. Produce it with:"
+            echo "  python -m scripts.analyze --score"
+            echo "then re-run this workflow (or run it in your release pipeline)."
+          fi
