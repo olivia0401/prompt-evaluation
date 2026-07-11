@@ -17,7 +17,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        # requirements-service.txt pulls in requirements.txt too, plus the
+        # FastAPI/SQLAlchemy/RQ deps that tests/test_service.py needs.
+        run: pip install -r requirements-service.txt pytest
 
       # The live tests in test_llm_client_live.py call real LLM APIs and need
       # secret keys, which CI intentionally does not have. They self-skip when

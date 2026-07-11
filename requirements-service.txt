@@ -1,0 +1,21 @@
+# Service layer (FastAPI API + RQ worker + Postgres + Streamlit dashboard).
+# The core engine deps live in requirements.txt; install both for the full stack:
+#   pip install -r requirements.txt -r requirements-service.txt
+-r requirements.txt
+
+# API
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.6.0
+
+# Persistence
+SQLAlchemy>=2.0.0
+psycopg[binary]>=3.1.0        # Postgres driver (SQLite works with no driver)
+
+# Queue
+rq>=1.16.0
+redis>=5.0.0
+
+# Dashboard
+streamlit>=1.33.0
+httpx>=0.27.0                 # dashboard -> API client (also used by TestClient)
