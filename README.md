@@ -94,10 +94,29 @@ Google Sheets upload (optional): set `GOOGLE_SHEETS_ID` in `.env`, enable **both
 Drive API and Sheets API in one Google Cloud project, and drop an OAuth desktop
 `credentials.json` in the project root (first run opens a browser for consent).
 
+## Service (API + queue + DB + dashboard)
+
+The batch engine above also runs as a long-running service — submit eval runs
+over HTTP, execute them on a worker, persist runs + results, and watch a
+dashboard. Zero-infra by default (SQLite + inline jobs); scales to Postgres +
+Redis + an RQ worker via `docker compose up`.
+
+```powershell
+pip install -r requirements-service.txt
+uvicorn service.api:app --reload      # http://localhost:8000/docs
+streamlit run service/dashboard.py    # http://localhost:8501
+# or the full async stack:
+docker compose up --build
+```
+
+`service/ci_gate.py` is the eval regression gate (blocks a release when a task's
+score drops below the committed baseline). Full details in
+[service/README.md](service/README.md).
+
 ## Tests
 
 ```powershell
-python -m pytest                      # offline tests
+python -m pytest                      # offline tests (incl. tests/test_service.py)
 ```
 
 ## Layout
@@ -106,6 +125,7 @@ python -m pytest                      # offline tests
 src/        # library: LLM client, scoring, prompt builder, Drive upload
 scripts/    # entry points: run_experiment, analyze, build_xlsx, audit_data,
             #               verify_models, measure_noise, compute_kappa
+service/    # API + RQ worker + Postgres models + Streamlit dashboard + eval gate
 tests/      # offline tests
 prompts.txt # task prompts (8 sentence + 4 keyword versions)
 briefs.yml  # client briefs (gitignored — copy from briefs.example.yml)

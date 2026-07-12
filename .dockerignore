@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+Results/
+data/
+# Secrets are passed via env (compose/.env), never baked into the image.
+.env
+credentials.json
+token.json
+briefs.yml
