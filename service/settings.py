@@ -47,6 +47,12 @@ MIRROR_TO_JSONL = os.getenv("MIRROR_TO_JSONL", "1").lower() in {"1", "true", "ye
 API_TITLE = "Prompt Evaluation Service"
 API_VERSION = "0.1.0"
 
+# Optional bearer token guarding the cost-incurring / state-changing routes
+# (POST /runs, cancel). When empty (the default) the API is open — fine for
+# local dev and tests. Set API_TOKEN in the environment before exposing the
+# service publicly, or anyone who can reach it could spend your LLM budget.
+API_TOKEN = os.getenv("API_TOKEN", "")
+
 
 def redis_available() -> bool:
     """True if a Redis server answers a PING at REDIS_URL."""

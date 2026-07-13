@@ -140,6 +140,30 @@ def test_api_end_to_end(monkeypatch):
     assert client.get("/runs/does-not-exist").status_code == 404
 
 
+def test_api_token_guards_runs(monkeypatch):
+    """When API_TOKEN is set, POST /runs needs a valid bearer token; /health
+    stays open."""
+    from fastapi.testclient import TestClient
+
+    from service import api
+    from service import settings as svc_settings
+
+    monkeypatch.setattr(svc_settings, "API_TOKEN", "s3cret")
+    monkeypatch.setattr(runner, "_default_todo_builder", lambda stage: fake_todo(stage))
+    monkeypatch.setattr(runner, "_default_client_factory",
+                        lambda **kw: FakeClient(budget_cap_usd=kw.get("budget_cap_usd")))
+
+    client = TestClient(api.app)
+
+    assert client.get("/health").status_code == 200  # liveness stays open
+    assert client.post("/runs", json={"stage": "phase0"}).status_code == 401
+    assert client.post("/runs", json={"stage": "phase0"},
+                       headers={"Authorization": "Bearer wrong"}).status_code == 401
+    ok = client.post("/runs", json={"stage": "phase0", "note": "auth"},
+                     headers={"Authorization": "Bearer s3cret"})
+    assert ok.status_code == 201, ok.text
+
+
 def test_ci_gate(tmp_path):
     import pandas as pd
 

@@ -13,9 +13,10 @@ Endpoints:
     GET  /runs/{id}/metrics           operational metrics for the run
     POST /runs/{id}/cancel            best-effort cancel of a queued run
 """
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from . import repository as repo
@@ -43,6 +44,20 @@ def get_db() -> Session:
         db.close()
 
 
+def require_auth(authorization: str | None = Header(default=None)):
+    """Guard cost-incurring / state-changing routes with a bearer token.
+
+    No-op when settings.API_TOKEN is empty (local dev, tests). When it is set,
+    requires `Authorization: Bearer <token>`, compared in constant time.
+    """
+    expected = settings.API_TOKEN
+    if not expected:
+        return
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Missing or invalid bearer token")
+
+
 @app.get("/health")
 def health():
     return {
@@ -64,7 +79,7 @@ def stages():
     return {"stages": out}
 
 
-@app.post("/runs", response_model=RunOut, status_code=201)
+@app.post("/runs", response_model=RunOut, status_code=201, dependencies=[Depends(require_auth)])
 def create_run(body: RunCreate, db: Session = Depends(get_db)):
     from .runner import STAGE_BUDGET_KEY
 
@@ -130,7 +145,7 @@ def get_metrics(run_id: str, db: Session = Depends(get_db)):
     return RunMetrics(**repo.run_metrics(db, run_id))
 
 
-@app.post("/runs/{run_id}/cancel", response_model=RunOut)
+@app.post("/runs/{run_id}/cancel", response_model=RunOut, dependencies=[Depends(require_auth)])
 def cancel_run(run_id: str, db: Session = Depends(get_db)):
     run = repo.get_run(db, run_id)
     if run is None:
