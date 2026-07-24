@@ -1,0 +1,8 @@
+# Optional QE / observability tooling (from the Awesome-LLMOps landscape).
+# Not needed for the core eval pipeline — install only to enable:
+#   - Langfuse tracing of every LLM call   -> src/observability.py
+#   - Giskard LLM vulnerability scan        -> scripts/scan_giskard.py
+#
+#   pip install -r requirements-qe.txt
+langfuse>=3.0.0
+giskard>=2.0.0

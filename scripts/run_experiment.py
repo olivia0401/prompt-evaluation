@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
-# Windows default codec is GBK on Chinese locales — can't print '✓' / '⚠'.
+# Windows default codec is GBK on Chinese locales — can't print '' / ''.
 # Force UTF-8 so checkpoint banners (and any subprocess output we re-print)
 # never crash mid-run.
 if hasattr(sys.stdout, "reconfigure"):
@@ -467,7 +467,7 @@ def main():
         cap = args.per_model_budget_usd
         print("Per-model spend (cap=${:.2f}/model):".format(cap))
         for mk, c in sorted(per_model.items(), key=lambda kv: -kv[1]):
-            flag = "  ⚠️ AT CAP" if c >= cap else ""
+            flag = "  [WARN] AT CAP" if c >= cap else ""
             print(f"  {mk:<10} ${c:>7.4f}{flag}")
 
     artifacts: list[dict] = []
@@ -533,7 +533,7 @@ def _run_build_step(label: str, cmd: list[str]) -> dict:
     if r.returncode != 0:
         # Last ~6 stderr lines is usually enough to diagnose
         tail = "\n    ".join(stderr.splitlines()[-6:]) if stderr else "(no stderr)"
-        print(f"  ⚠️ {label} failed (rc={r.returncode}):\n    {tail}")
+        print(f"  [WARN] {label} failed (rc={r.returncode}):\n    {tail}")
         return {"label": label, "status": "FAILED", "error": tail, "url": None}
 
     m = _URL_RE.search(stdout)
@@ -556,7 +556,7 @@ def _auto_build_artifacts(stage: str, dry_run_build: bool) -> list[dict]:
       4. build_xlsx             (Drive upload — replaces RESULTS_SHEETS_ID in place)
       5. audit_workbook         (cross-check every auto-generated claim vs
                                  scored.csv. Non-blocking: a failure prints
-                                 ⚠️ in the STOP gate but downstream stages
+                                 [WARN] in the STOP gate but downstream stages
                                  are not gated on it.)
 
     Steps 3 and 4 are kept local (no Drive upload) when dry_run_build=True.
@@ -647,7 +647,7 @@ def _print_checkpoint_gate(
         print("")
         print("  AUTO-BUILD ARTIFACTS")
         for a in artifacts:
-            tag = {"OK": "✓", "FAILED": "⚠️", "SKIPPED": "↷"}.get(a["status"], "?")
+            tag = {"OK": "[OK]", "FAILED": "[WARN]", "SKIPPED": "↷"}.get(a["status"], "?")
             line = f"    {tag} {a['label']:<18}"
             if a["url"]:
                 line += a["url"]
@@ -659,7 +659,7 @@ def _print_checkpoint_gate(
         failed = [a for a in artifacts if a["status"] == "FAILED"]
         if failed:
             print("")
-            print("  ⚠️ One or more auto-build steps failed — fix and retry manually:")
+            print("  [WARN] One or more auto-build steps failed — fix and retry manually:")
             for a in failed:
                 if a["label"] == "score":
                     print(f"     python -m scripts.analyze --score")

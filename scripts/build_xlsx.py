@@ -12,7 +12,7 @@ Writes: Results/Prompt Eval Results.xlsx (auto-upload to RESULTS_SHEETS_ID when 
 import sys
 from pathlib import Path
 
-# Windows default codec is GBK on Chinese locales — can't print '✓' / '⚠'.
+# Windows default codec is GBK on Chinese locales — can't print '' / ''.
 # Force UTF-8 so terminal logging never crashes the upload step.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -1662,7 +1662,7 @@ def _cost_quality_stance(scored: pd.DataFrame) -> str:
     _, _, prem_verdict = _phase4_premium_summary(scored)
     if prem_verdict and "|" in prem_verdict:
         _, msg = prem_verdict.split("|", 1)
-        return msg.lstrip("✓⚠ ").split(". ")[0] + "."
+        return msg.strip().split(". ")[0] + "."
     return "Cheap models look sufficient. Premium check (top configs only) is the next step."
 
 
@@ -2781,7 +2781,7 @@ def _premium_vs_cheap_df(scored: pd.DataFrame) -> pd.DataFrame:
         prem_v  = _best(_PREMIUM_MODELS)
         delta = (round(prem_v - cheap_v, 3)
                  if (prem_v is not None and cheap_v is not None) else None)
-        check = " ✓" if (delta is not None and delta > 0) else ""
+        check = " [OK]" if (delta is not None and delta > 0) else ""
         rows.append({
             T("Task", "任务"): task,
             T("Cheap", "便宜层"):
@@ -5429,7 +5429,7 @@ def main():
             print(f"Uploading to Google Sheets {target_sheet_id} (replacing existing content)...")
             from src.google_drive import upload_xlsx_to_replace_sheets
             url = upload_xlsx_to_replace_sheets(tmp, target_sheet_id)
-            print(f"\n✓ Google Sheets updated: {url}\n")
+            print(f"\n[OK] Google Sheets updated: {url}\n")
         finally:
             try:
                 tmp.unlink(missing_ok=True)

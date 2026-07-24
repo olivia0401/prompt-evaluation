@@ -260,6 +260,13 @@ class LLMClient:
                         self._per_model_cost_usd.get(model_key, 0.0) + result.cost_usd
                     )
 
+        # Optional Langfuse trace (no-op unless LANGFUSE_* env vars are set).
+        try:
+            from . import observability
+        except ImportError:
+            import observability
+        observability.log_generation(result)
+
         return result
 
     # ---- provider-specific ----

@@ -876,7 +876,7 @@ def run_all_checks() -> list[CheckResult]:
 
 
 def print_human(results: list[CheckResult]) -> int:
-    glyph = {PASS: "✓", WARN: "⚠", FAIL: "✗"}
+    glyph = {PASS: "[OK]", WARN: "[WARN]", FAIL: "[FAIL]"}
     n_fail = sum(1 for r in results if r.status == FAIL)
     n_warn = sum(1 for r in results if r.status == WARN)
     n_pass = sum(1 for r in results if r.status == PASS)

@@ -9,7 +9,7 @@ Run after build_xlsx in the auto-build chain. Catches:
 
 Exit code:
   0 = all checks pass
-  1 = at least one mismatch (auto-build chain surfaces ⚠️ in STOP gate)
+  1 = at least one mismatch (auto-build chain surfaces [WARN] in STOP gate)
 
 Run standalone:
     python -m scripts.audit_workbook
@@ -526,16 +526,16 @@ def check_keyword_f1_matches_groupby(checks: list, ws_tab3, scored: pd.DataFrame
 
 def main() -> int:
     if not SCORED_CSV.exists():
-        print(f"⚠️ Missing {SCORED_CSV}. Audit skipped — run analyze --score first.")
+        print(f"[WARN] Missing {SCORED_CSV}. Audit skipped — run analyze --score first.")
         return 0  # not a failure of the audit itself
     if not WORKBOOK.exists():
-        print(f"⚠️ Missing {WORKBOOK}. Audit skipped — run build_xlsx first.")
+        print(f"[WARN] Missing {WORKBOOK}. Audit skipped — run build_xlsx first.")
         return 0
 
     scored = pd.read_csv(SCORED_CSV)
     wb = openpyxl.load_workbook(WORKBOOK)
     if not {"Executive Summary", "Recommended Configs", "Field & Compression"} <= set(wb.sheetnames):
-        print("⚠️ Workbook missing expected tabs — skipping audit.")
+        print("[WARN] Workbook missing expected tabs — skipping audit.")
         return 0
 
     from src.utils import read_jsonl
@@ -566,9 +566,9 @@ def main() -> int:
 
     print(f"=== Workbook audit ({len(passed)} passed, {len(failed)} failed) ===")
     for ok, name, detail in passed:
-        print(f"  ✓ {name}" + (f" — {detail}" if detail else ""))
+        print(f"  [OK] {name}" + (f" — {detail}" if detail else ""))
     for ok, name, detail in failed:
-        print(f"  ✗ {name}" + (f" — {detail}" if detail else ""))
+        print(f"  [FAIL] {name}" + (f" — {detail}" if detail else ""))
 
     return 0 if not failed else 1
 

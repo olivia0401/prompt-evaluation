@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import sys
 
-# Windows default codec is GBK on Chinese locales — can't print '✓' / '⚠'.
+# Windows default codec is GBK on Chinese locales — can't print '' / ''.
 # Force UTF-8 so terminal logging never crashes the upload step.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -466,7 +466,7 @@ def render_html(p: EngNotePayload) -> str:
 
     status_rows_html = []
     for r in p.status_rows:
-        badge = "✅ OK" if r.status == "OK" else "🟥 " + r.status
+        badge = "[OK] OK" if r.status == "OK" else "" + r.status
         status_rows_html.append(
             "<tr>"
             f"<td><code>{esc(r.model_key)}</code></td>"
@@ -616,7 +616,7 @@ def main():
         return
 
     url = upload_as_google_doc(html_str, payload.title, args.folder_id)
-    print(f"\n✓ Engineering-note Google Doc created: {url}\n")
+    print(f"\n[OK] Engineering-note Google Doc created: {url}\n")
 
 
 if __name__ == "__main__":

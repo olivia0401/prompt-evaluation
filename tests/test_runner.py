@@ -144,9 +144,9 @@ def test_auto_build_chain_happy_path(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         if "build_engineering_note" in " ".join(cmd):
-            return _fake_completed(stdout="✓ Doc created: https://docs.google.com/document/d/eng456/edit")
+            return _fake_completed(stdout="[OK] Doc created: https://docs.google.com/document/d/eng456/edit")
         if "build_xlsx" in " ".join(cmd):
-            return _fake_completed(stdout="✓ Google Sheets updated: https://docs.google.com/spreadsheets/d/wb789/edit")
+            return _fake_completed(stdout="[OK] Google Sheets updated: https://docs.google.com/spreadsheets/d/wb789/edit")
         if "audit_workbook" in " ".join(cmd):
             return _fake_completed(stdout="=== Workbook audit (6 passed, 0 failed) ===")
         return _fake_completed(stdout="scored 42 rows")

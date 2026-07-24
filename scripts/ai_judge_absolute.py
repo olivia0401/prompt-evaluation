@@ -206,7 +206,7 @@ def main():
             rec = judge_one(client, row)
             if rec is None:
                 print(f"  [{i}/{len(todo)}] {row['task']:18s} "
-                      f"{row['brief_id']:20s}  ⚠️ judge call failed")
+                      f"{row['brief_id']:20s}  [WARN] judge call failed")
                 continue
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if rec["score"] is not None:
@@ -216,7 +216,7 @@ def main():
             else:
                 parse_fails += 1
                 print(f"  [{i}/{len(todo)}] {row['task']:18s} "
-                      f"{row['brief_id']:20s}  ⚠️ unparseable response: "
+                      f"{row['brief_id']:20s}  [WARN] unparseable response: "
                       f"{rec['raw_response'][:60]!r}")
 
     print()

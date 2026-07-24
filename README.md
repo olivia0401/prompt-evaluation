@@ -119,6 +119,21 @@ score drops below the committed baseline). Full details in
 python -m pytest                      # offline tests (incl. tests/test_service.py)
 ```
 
+## QE tooling (optional)
+
+Two industry tools sit alongside the custom scoring, both off unless configured
+(`pip install -r requirements-qe.txt`):
+
+- **Langfuse** (`src/observability.py`) — set `LANGFUSE_PUBLIC_KEY` /
+  `LANGFUSE_SECRET_KEY` and every `LLMClient.call()` logs a generation
+  (prompt, output, tokens, cost, latency, status) for per-call tracing on top of
+  the CSV/JSONL. No keys → silent no-op.
+- **Giskard** (`scripts/scan_giskard.py`) — `python -m scripts.scan_giskard
+  --task concept_relevant --model haiku` runs an LLM vulnerability scan
+  (hallucination, prompt injection, robustness) and writes an HTML report to
+  `results/`. Complements the "how well does it score" pipeline with "how does
+  it break".
+
 ## Layout
 
 ```
