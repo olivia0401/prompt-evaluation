@@ -1,0 +1,121 @@
+description: context — recipe screening (17 recipes x 2 cheap models)
+prompts:
+- label: full-brief
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}
+
+    Differentiators: {{differentiators}}
+
+    Audience: {{audience}}
+
+    Brand Strategy: {{brand_strategy}}
+
+    Personality: {{personality}}'
+- label: product
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}'
+- label: differentiators
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Differentiators: {{differentiators}}'
+- label: audience
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Audience: {{audience}}'
+- label: brand_strategy
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Brand Strategy: {{brand_strategy}}'
+- label: personality
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Personality: {{personality}}'
+- label: product+differentiators
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}
+
+    Differentiators: {{differentiators}}'
+- label: product+audience
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}
+
+    Audience: {{audience}}'
+- label: product+brand_strategy
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}
+
+    Brand Strategy: {{brand_strategy}}'
+- label: product+personality
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Product: {{product}}
+
+    Personality: {{personality}}'
+- label: differentiators+audience
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Differentiators: {{differentiators}}
+
+    Audience: {{audience}}'
+- label: differentiators+brand_strategy
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Differentiators: {{differentiators}}
+
+    Brand Strategy: {{brand_strategy}}'
+- label: differentiators+personality
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Differentiators: {{differentiators}}
+
+    Personality: {{personality}}'
+- label: audience+brand_strategy
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Audience: {{audience}}
+
+    Brand Strategy: {{brand_strategy}}'
+- label: audience+personality
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Audience: {{audience}}
+
+    Personality: {{personality}}'
+- label: brand_strategy+personality
+  raw: 'You are a brand strategy consultant. From the company information below, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+
+
+    Brand Strategy: {{brand_strategy}}
+
+    Personality: {{personality}}'
+- label: baseline
+  raw: You are a brand strategy consultant. Based on general brand knowledge, summarize the social, physical and environmental context(s) in which the product or service exists, in one sentence, 15-25 words. Write only the sentence, no preamble, no quotes.
+providers:
+- openai:gpt-5-mini-2025-08-07
+- anthropic:claude-haiku-4-5-20251001
+defaultTest:
+  assert:
+  - type: similar
+    value: '{{context_relevant}}'
+    threshold: 0.7
+tests: file://../tests.yaml

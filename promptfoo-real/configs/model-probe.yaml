@@ -1,4 +1,4 @@
-description: "测 6 个模型能不能跑"
+description: probe that all 6 models are reachable
 prompts:
   - "Reply with the single word: ok"
 providers:
