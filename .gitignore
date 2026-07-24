@@ -27,3 +27,8 @@ Results/
 
 # Client-confidential input data — copy briefs.example.yml → briefs.yml locally
 briefs.yml
+
+# promptfoo cross-validation: generated test data + raw results contain client briefs
+promptfoo-real/tests.yaml
+promptfoo-real/tests3.yaml
+promptfoo-real/results/
