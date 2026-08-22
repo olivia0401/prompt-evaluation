@@ -3,7 +3,8 @@ from typing import Optional
 
 from sqlalchemy import func, select
 
-from .models import CallResultRow, Run, RunStatus
+from .models import CallResultRow, QualityReport, Run, RunStatus
+import json
 
 
 def create_run(session, *, stage, budget_usd=None, max_calls=None, concurrency=None, note=None) -> Run:
@@ -99,3 +100,21 @@ def run_metrics(session, run_id: str) -> dict:
         "tokens_out": tokens_out,
         "mean_latency_s": round(latency_sum / n, 3) if n else None,
     }
+
+
+def create_quality_report(session, report: dict, passed: bool) -> QualityReport:
+    provenance = report.get("provenance", {})
+    row = QualityReport(
+        dataset_version=str(report.get("dataset_version", "unknown")),
+        evaluator_version=str(provenance.get("evaluator_version", "unknown")),
+        passed=int(bool(passed)),
+        report_json=json.dumps(report, ensure_ascii=False, sort_keys=True),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def list_quality_reports(session, *, limit: int = 50, offset: int = 0):
+    stmt = select(QualityReport).order_by(QualityReport.created_at.desc())
+    return list(session.execute(stmt.limit(limit).offset(offset)).scalars())

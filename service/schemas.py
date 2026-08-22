@@ -46,3 +46,18 @@ class RunMetrics(BaseModel):
     tokens_in: int = 0
     tokens_out: int = 0
     mean_latency_s: Optional[float] = None
+
+
+class QualityReportIn(BaseModel):
+    report: dict = Field(..., description="quality-report/v1 JSON report")
+
+
+class QualityReportOut(BaseModel):
+    id: str
+    dataset_version: str
+    evaluator_version: str
+    passed: bool
+    metrics: dict[str, float] = {}
+    provenance: dict = {}
+    errors: list[str] = []
+    created_at: Optional[str] = None

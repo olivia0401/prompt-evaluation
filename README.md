@@ -113,6 +113,42 @@ docker compose up --build
 score drops below the committed baseline). Full details in
 [service/README.md](service/README.md).
 
+### Evidence-grounded quality gate
+
+The platform also includes an offline, annotation-driven quality contract for
+investigative or evidence-grounded outputs:
+
+- `src/quality_evaluators.py` measures citation completeness, groundedness,
+  unsupported-claim rate, source quality, entity-resolution B-cubed F1, and
+  ordinal judge/human calibration.
+- `src/golden_manifest.py` fingerprints golden files with SHA-256 so a report
+  cannot silently change its evaluation set.
+- `service/quality_gate.py` blocks a release unless the report carries its
+  dataset version, evaluator version and golden-manifest hash, and meets the
+  configured quality floors.
+
+These metrics require explicit gold annotations; lexical similarity alone is
+not treated as proof that a claim is true. Example usage:
+
+```powershell
+python -m scripts.build_golden_manifest --root data/golden --output data/golden/manifest.json --version 2026.08.22
+python -m scripts.build_golden_manifest --root data/golden --verify data/golden/manifest.json
+python -m scripts.build_quality_report --input data/golden/annotations.json `
+  --manifest data/golden/manifest.json --output outputs/quality_report.json
+python -m service.quality_gate outputs/quality_report.json
+python -m scripts.aggregate_quality_reports --inputs outputs/run_1.json outputs/run_2.json `
+  --output outputs/quality_stability.json
+```
+
+The quality report schema is `quality-report/v1`. It is intentionally separate
+from the existing prompt-score gate: prompt quality, evidence grounding,
+entity resolution and judge calibration have different denominators and must
+not be collapsed into one misleading score.
+
+Browser smoke tests live under `e2e/` and run in Chromium, Firefox and WebKit.
+They use `E2E_BASE_URL` and optional `E2E_API_TOKEN`; credentials for real
+personas or tenant-isolation tests belong in staging secrets, never in git.
+
 ## Tests
 
 ```powershell

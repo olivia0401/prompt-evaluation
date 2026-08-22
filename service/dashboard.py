@@ -109,3 +109,24 @@ if run_id:
         st.dataframe(rdf[cols], use_container_width=True, hide_index=True)
     else:
         st.info("No results recorded yet.")
+
+# --- Quality trend --------------------------------------------------------
+st.subheader("Evidence-grounded quality trend")
+try:
+    quality = api_get("/quality-reports", limit=100)
+    if quality:
+        qdf = pd.DataFrame([
+            {"created_at": row.get("created_at"), "dataset": row.get("dataset_version"),
+             "passed": row.get("passed"), **row.get("metrics", {})}
+            for row in quality
+        ])
+        st.dataframe(qdf, use_container_width=True, hide_index=True)
+        metric_cols = [c for c in ["groundedness", "citation_completeness",
+                                   "entity_resolution_f1", "judge_weighted_kappa"]
+                       if c in qdf.columns]
+        if metric_cols:
+            st.line_chart(qdf.set_index("created_at")[metric_cols])
+    else:
+        st.info("No quality reports recorded yet.")
+except Exception as e:
+    st.warning(f"Quality reports unavailable: {e}")

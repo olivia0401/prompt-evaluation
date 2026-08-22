@@ -100,6 +100,26 @@ when no `scored.csv` is present, so wire it into the release pipeline where
 scoring actually runs. `outputs/` is gitignored, so the baseline JSON is the
 only committed artifact.
 
+## Evidence-grounded quality gate
+
+For systems that produce claims backed by sources, run a second gate against an
+annotated `quality-report/v1` JSON report:
+
+```powershell
+python -m service.quality_gate outputs/quality_report.json
+```
+
+The report must include `dataset_version`, `metrics` and `provenance` with both
+an evaluator version and a SHA-256 golden-manifest hash. Default floors are:
+groundedness ≥ 0.90, citation completeness ≥ 0.95, unsupported claims ≤ 0.05,
+entity-resolution F1 ≥ 0.90, source acceptable rate ≥ 0.90 and judge weighted
+κ ≥ 0.60. The thresholds are intentionally explicit and can be overridden by
+calling `check_report` from a release pipeline.
+
+The evaluator is annotation-driven: human/researcher gold labels define which
+evidence supports a claim and what source quality means. This prevents a simple
+string-overlap score from being presented as factual verification.
+
 ## Layout
 
 ```
@@ -115,4 +135,5 @@ service/
   api.py          FastAPI app
   dashboard.py    Streamlit dashboard (HTTP client of the API)
   ci_gate.py      eval regression gate
+  quality_gate.py evidence-grounded quality/release gate
 ```
