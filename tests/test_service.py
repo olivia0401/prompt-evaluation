@@ -191,3 +191,30 @@ def test_ci_gate(tmp_path):
     baseline["tasks"]["t1"]["value"] = 0.90
     passed, _ = ci_gate.check(metrics, baseline)
     assert passed is False
+
+
+def test_quality_report_api_stores_pass_and_fail(monkeypatch):
+    from fastapi.testclient import TestClient
+    from service import api
+
+    report = {
+        "schema": "quality-report/v1",
+        "dataset_version": "golden-test",
+        "metrics": {
+            "groundedness": 0.95, "citation_completeness": 0.98,
+            "unsupported_claim_rate": 0.01, "entity_resolution_f1": 0.95,
+            "judge_weighted_kappa": 0.75, "source_acceptable_rate": 0.95,
+        },
+        "provenance": {"evaluator_version": "test", "golden_manifest_sha256": "abc"},
+    }
+    client = TestClient(api.app)
+    response = client.post("/quality-reports", json={"report": report})
+    assert response.status_code == 201
+    assert response.json()["passed"] is True
+    assert client.get("/quality-reports").status_code == 200
+
+    report["metrics"]["groundedness"] = 0.2
+    response = client.post("/quality-reports", json={"report": report})
+    assert response.status_code == 201
+    assert response.json()["passed"] is False
+    assert any("groundedness" in e for e in response.json()["errors"])

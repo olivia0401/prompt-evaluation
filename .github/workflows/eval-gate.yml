@@ -15,6 +15,10 @@ on:
         description: Path to scored.csv to gate on
         default: outputs/scored.csv
         required: false
+      quality_report_path:
+        description: Path to quality-report/v1 JSON to gate on
+        default: outputs/quality_report.json
+        required: false
   pull_request:
 
 jobs:
@@ -40,4 +44,14 @@ jobs:
             echo "No $SCORED present — skipping gate. Produce it with:"
             echo "  python -m scripts.analyze --score"
             echo "then re-run this workflow (or run it in your release pipeline)."
+
+      - name: Run evidence-grounded quality gate
+        run: |
+          REPORT="${{ github.event.inputs.quality_report_path || 'outputs/quality_report.json' }}"
+          if [ -f "$REPORT" ]; then
+            python -m service.quality_gate "$REPORT"
+          else
+            echo "No $REPORT present — skipping evidence-grounded gate."
+            echo "Produce a quality-report/v1 JSON after the annotated evaluation run."
+          fi
           fi

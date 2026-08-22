@@ -6,6 +6,7 @@ CallResultRow  — one LLM call result, mirroring src.llm_client.CallResult,
                  foreign-keyed to its Run. This is the durable home for what
                  used to live only in outputs/results.jsonl.
 """
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -176,6 +177,32 @@ class CallResultRow(Base):
             "error": self.error,
             "provider_request_id": self.provider_request_id,
             "ts": self.ts,
+        }
+
+
+class QualityReport(Base):
+    """Durable quality snapshot used for trend monitoring and release gates."""
+
+    __tablename__ = "quality_reports"
+
+    id = Column(String(32), primary_key=True, default=_uuid)
+    dataset_version = Column(String(128), nullable=False, index=True)
+    evaluator_version = Column(String(128), nullable=False)
+    passed = Column(Integer, nullable=False, default=0)
+    report_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    def to_dict(self) -> dict:
+        report = json.loads(self.report_json)
+        return {
+            "id": self.id,
+            "dataset_version": self.dataset_version,
+            "evaluator_version": self.evaluator_version,
+            "passed": bool(self.passed),
+            "metrics": report.get("metrics", {}),
+            "provenance": report.get("provenance", {}),
+            "errors": report.get("gate_errors", []),
+            "created_at": _iso(self.created_at),
         }
 
 

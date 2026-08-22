@@ -23,7 +23,7 @@ from . import repository as repo
 from . import settings
 from .db import SessionLocal, init_db
 from .models import RunStatus
-from .schemas import RunCreate, RunMetrics, RunOut
+from .schemas import QualityReportIn, QualityReportOut, RunCreate, RunMetrics, RunOut
 from .tasks import enqueue_run
 
 
@@ -66,6 +66,30 @@ def health():
         "queue": "redis" if settings.redis_available() else "inline",
         "database": settings.DATABASE_URL.split("://", 1)[0],
     }
+
+
+@app.post("/quality-reports", response_model=QualityReportOut, status_code=201,
+          dependencies=[Depends(require_auth)])
+def create_quality_report(body: QualityReportIn, db: Session = Depends(get_db)):
+    """Store a quality snapshot and return its release-gate decision."""
+    from service.quality_gate import check_report
+
+    passed, errors = check_report(body.report)
+    report = dict(body.report)
+    report["gate_errors"] = errors
+    row = repo.create_quality_report(db, report, passed)
+    db.commit()
+    return QualityReportOut(**row.to_dict())
+
+
+@app.get("/quality-reports", response_model=list[QualityReportOut])
+def list_quality_reports(
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    return [QualityReportOut(**row.to_dict())
+            for row in repo.list_quality_reports(db, limit=limit, offset=offset)]
 
 
 @app.get("/stages")
