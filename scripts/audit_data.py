@@ -2,7 +2,7 @@
 Data integrity + reliability audit.
 
 Cross-checks the experiment outputs against what the plan and workbook claim,
-catching the kind of "23 briefs" mismatch that misled Simon's review:
+catching the kind of "23 briefs" mismatch that misled an earlier review:
 
   Group A — Schema / prerequisites
     A1. results.jsonl exists and is non-empty

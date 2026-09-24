@@ -139,7 +139,7 @@ def build_todo(stage: str) -> list[dict]:
     Returns list of dicts: {brief_id, task, config_id, model_key, run_id, prompt}
 
     Stage definitions:
-      phase0  : PHASE0_BRIEF_NAMES (3 briefs) x 17 configs x 2 cheap models x 1 run
+      phase0  : pilot briefs flagged `phase0: true` (3) x 17 configs x 2 cheap models x 1 run
       stage_a : 23 briefs x all-phase configs x 2 cheap models x 1 run
       stage_b : caller passes shortlisted configs via a separate flow (NotImplementedError)
       phase4  : top-1 config per task (from summary_by_config.csv) x curated brief
@@ -153,13 +153,13 @@ def build_todo(stage: str) -> list[dict]:
         FULL_BRIEF,
         PROMPT_IMPLIED,
         TRIVIAL,
-        PHASE0_BRIEF_NAMES,
         brief_id,
         build_prompt,
         list_configs_for_stage,
         list_phase0_configs,
         load_briefs,
         load_prompts,
+        phase0_briefs,
     )
 
     SENTINELS = {FULL_BRIEF, PROMPT_IMPLIED, TRIVIAL}
@@ -168,12 +168,8 @@ def build_todo(stage: str) -> list[dict]:
     templates = load_prompts()
 
     if stage == "phase0":
-        # Hand-picked briefs from prompt_builder.PHASE0_BRIEF_NAMES
-        wanted = set(PHASE0_BRIEF_NAMES)
-        briefs = [b for b in all_briefs if brief_id(b) in wanted]
-        missing = wanted - {brief_id(b) for b in briefs}
-        if missing:
-            raise SystemExit(f"PHASE0_BRIEF_NAMES not found in briefs.yml: {missing}")
+        # Hand-picked pilot briefs, flagged `phase0: true` in briefs.yml.
+        briefs = phase0_briefs(all_briefs)
         configs = list_phase0_configs()
         models = ["haiku", "gpt5mini"]
         runs = [1]
@@ -252,13 +248,9 @@ def build_todo(stage: str) -> list[dict]:
             print(f"  {task:18s} -> {cfg_ids}")
     elif stage == "phase4":
         # Premium re-run on top-1 cheap-screen winner per task.
-        # Brief subset = PHASE0_BRIEF_NAMES (curated for category diversity).
+        # Brief subset = the phase0 pilot briefs (curated for category diversity).
         # Budget envelope kept tight by config.BUDGET_CAP["phase_4_premium"] (~£1).
-        wanted = set(PHASE0_BRIEF_NAMES)
-        briefs = [b for b in all_briefs if brief_id(b) in wanted]
-        missing = wanted - {brief_id(b) for b in briefs}
-        if missing:
-            raise SystemExit(f"PHASE0_BRIEF_NAMES not found in briefs.yml: {missing}")
+        briefs = phase0_briefs(all_briefs)
 
         from src.prompt_builder import Config
         top = _load_top_configs_per_task()

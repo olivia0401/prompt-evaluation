@@ -2401,7 +2401,7 @@ def _purpose_statement(scored: pd.DataFrame) -> str:
 
 
 def _exec_key_findings(scored: pd.DataFrame, raw: pd.DataFrame) -> list[str]:
-    """4 decision-relevant findings, in the order Simon's review asked for:
+    """4 decision-relevant findings, in the order the reviewer asked for:
        1) cheap-model parity, 2) Full Brief unnecessary, 3) Product is king,
        4) keyword prompt compresses cheaply. All data-driven, no hardcoding."""
     out: list[str] = []
@@ -2542,7 +2542,7 @@ def _production_strategy() -> list[str]:
     """4 strategy bullets — the engineering-decision layer.
 
     These describe the WORKFLOW used to reach the recommendations, not the
-    recommendations themselves. They're the signal Simon's brief asked for:
+    recommendations themselves. They're the signal the reviewer asked for:
     cost-aware experimentation, shortlist-and-validate, noise-floor decisions.
     """
     return [
@@ -2690,7 +2690,7 @@ def write_tab_conclusion(ws, start_row: int, lines: list[str], ncols: int) -> in
 def write_tech_note(ws, start_row: int, text: str, ncols: int) -> int:
     """One-line technical footnote — smaller, grey, italic. Use directly under
     a write_tab_conclusion plain-English banner to separate human-readable
-    framing from the implementation detail Simon's review style asked for."""
+    framing from the implementation detail the reviewer asked for."""
     _merge_and_write(ws, start_row, text, ncols,
                      font=Font(size=9, italic=True, color="626A6E"),
                      fill=None)
@@ -3229,7 +3229,7 @@ def build_tab_executive_summary(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> 
     row += 2
 
     # ============================================================
-    # 7. Score explanation — answers Simon's "what does the score mean?"
+    # 7. Score explanation — answers the reviewer's "what does the score mean?"
     # ============================================================
     row = write_section_bar(ws, row,
         T("7. Score explanation", "7. 分数说明"), ncols=NCOLS)
@@ -4016,7 +4016,7 @@ def _human_review_table(scored: pd.DataFrame) -> pd.DataFrame:
         AI Output | Per-brief score | Aggregate (this recipe, 23 briefs) |
         Sonnet 1-5 | Human 1-5 | Notes |
 
-    The "Per-brief score" vs "Aggregate" split is the key Simon-asked-for
+    The "Per-brief score" vs "Aggregate" split is the key reviewer-requested
     clarification: aggregate scores in Tabs 1–3 = mean of per-brief scores
     like the ones in this column.
     """
@@ -4874,12 +4874,12 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
                 f"weighted κ = {sanity_kappa:.2f} ({verdict}). This is an "
                 "AI-internal consistency measure (Sonnet's rating tracks "
                 "cosine), not a human-vs-AI validation. The Human ↔ Sonnet "
-                "κ above is the one Simon's review needs.",
+                "κ above is the one the review needs.",
                 f"健全性检查 —— 在已收集的 {n_pairs} 条 Sonnet 绝对评分上，"
                 f"Sonnet 1-5 与余弦分箱的 Cohen 加权 κ = {sanity_kappa:.2f}"
                 f"（{verdict}）。这是 AI 内部一致性度量"
                 "（Sonnet 的评分是否与余弦一致），不是人工 vs AI 的验证。"
-                "上方「人工 ↔ Sonnet」的 κ 才是 Simon 审阅真正需要的那个。"),
+                "上方「人工 ↔ Sonnet」的 κ 才是审阅真正需要的那个。"),
             ncols=NCOLS, font=Font(size=10, italic=True, color="626A6E"))
         ws.row_dimensions[row].height = _estimate_row_height(
             "Sanity check — across N Sonnet absolute ratings collected so far...",

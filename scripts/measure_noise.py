@@ -51,7 +51,6 @@ if hasattr(sys.stdout, "reconfigure"):
 # Sample several briefs spread across the set rather than relying on one.
 # Falls back gracefully if briefs.yml has fewer than this many.
 N_BRIEFS = 5
-PREFERRED_BRIEFS = ["Plonts"]  # keep one stable anchor for run-to-run comparison
 RERUNS = 5
 DEFAULT_MODELS = ["haiku", "gpt5mini"]
 OUT_PATH = cfg.OUTPUTS_DIR / f"noise_floor_{datetime.now():%Y%m%d_%H%M%S}.json"
@@ -62,7 +61,10 @@ def select_briefs(all_briefs: list[dict], n: int) -> list[dict]:
     by_id = {brief_id(b): b for b in all_briefs}
     chosen: list[dict] = []
     seen: set[str] = set()
-    for name in PREFERRED_BRIEFS:
+    # One stable anchor for run-to-run comparison: the first phase0 pilot brief
+    # (flagged in the gitignored briefs.yml, so no client name lives in code).
+    preferred = [brief_id(b) for b in all_briefs if b.get("phase0") is True][:1]
+    for name in preferred:
         if name in by_id and name not in seen:
             chosen.append(by_id[name])
             seen.add(name)

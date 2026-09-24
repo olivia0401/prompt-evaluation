@@ -11,3 +11,15 @@ data/
 credentials.json
 token.json
 briefs.yml
+# Generated from the confidential briefs; never bake into an image.
+promptfoo-real/results/
+promptfoo-real/tests.yaml
+promptfoo-real/tests3.yaml
+results/
+# Local tooling and node dependencies.
+.claude/
+.github/
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+*.pdf

@@ -62,12 +62,12 @@ FULL_BRIEF = "_full_brief"
 PROMPT_IMPLIED = "_prompt_implied"
 TRIVIAL = "_trivial"
 
-# Phase 0 Pilot: 3 hand-picked briefs covering category diversity.
-PHASE0_BRIEF_NAMES = [
-    "Plonts",              # consumer food (plant-based)
-    "Data Fabric",         # B2B tech / enterprise data
-    "Board of Innovation", # B2B service / consulting
-]
+# Phase 0 pilot (and the Phase 4 premium ladder): 3 hand-picked briefs chosen
+# for category diversity (consumer food, B2B tech, B2B service). Brief names are
+# client-confidential, so they are not hard-coded here: flag the pilot briefs
+# with `phase0: true` in the gitignored briefs.yml instead.
+PHASE0_FLAG = "phase0"
+PHASE0_BRIEF_COUNT = 3
 
 # Phase 2 targeted metadata combos (hypothesis-driven).
 TARGETED_METADATA_COMBOS: list[tuple[str, list[str]]] = [
@@ -206,6 +206,22 @@ def load_briefs(path: Optional[Path] = None) -> list[dict]:
 def brief_id(brief: dict) -> str:
     """Stable identifier for a brief — uses current_name."""
     return str(brief.get("current_name", "")).strip()
+
+
+def phase0_briefs(briefs: list[dict]) -> list[dict]:
+    """Return the pilot briefs flagged with ``phase0: true`` in briefs.yml.
+
+    Raises SystemExit with setup instructions unless exactly
+    PHASE0_BRIEF_COUNT briefs are flagged.
+    """
+    chosen = [b for b in briefs if b.get(PHASE0_FLAG) is True]
+    if len(chosen) != PHASE0_BRIEF_COUNT:
+        raise SystemExit(
+            f"Expected {PHASE0_BRIEF_COUNT} briefs flagged `{PHASE0_FLAG}: true` "
+            f"in briefs.yml, found {len(chosen)}. Flag one consumer, one B2B-tech "
+            f"and one B2B-service brief."
+        )
+    return chosen
 
 
 # ---------- Compatibility ----------

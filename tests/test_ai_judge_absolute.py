@@ -64,23 +64,23 @@ def test_done_keys_indexes_resume_tuples(tmp_path):
     judge = _import_judge()
     p = tmp_path / "ai_judge_absolute.jsonl"
     rows = [
-        {"brief_id": "Plonts", "task": "concept_relevant",
+        {"brief_id": "brief-A", "task": "concept_relevant",
          "config_id": "A:personality", "model_key": "haiku", "run_id": 1,
          "score": 4},
-        {"brief_id": "Plonts", "task": "emotion_relevant",
+        {"brief_id": "brief-A", "task": "emotion_relevant",
          "config_id": "A:_full_brief", "model_key": "gpt5mini", "run_id": 1,
          "score": 3},
         # A row with score=None must be ignored — it should be re-judged.
-        {"brief_id": "Plonts", "task": "feature_relevant",
+        {"brief_id": "brief-A", "task": "feature_relevant",
          "config_id": "A:product", "model_key": "haiku", "run_id": 1,
          "score": None},
     ]
     p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
     done = judge._done_keys(p)
-    assert ("Plonts", "concept_relevant", "A:personality", "haiku", 1) in done
-    assert ("Plonts", "emotion_relevant", "A:_full_brief", "gpt5mini", 1) in done
+    assert ("brief-A", "concept_relevant", "A:personality", "haiku", 1) in done
+    assert ("brief-A", "emotion_relevant", "A:_full_brief", "gpt5mini", 1) in done
     # Parse-failed row should NOT be marked done — it must be retried.
-    assert ("Plonts", "feature_relevant", "A:product", "haiku", 1) not in done
+    assert ("brief-A", "feature_relevant", "A:product", "haiku", 1) not in done
     assert len(done) == 2
 
 

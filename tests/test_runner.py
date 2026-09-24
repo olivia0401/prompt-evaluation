@@ -77,24 +77,24 @@ def test_stage_b_picks_top_2_per_task(tmp_path, monkeypatch):
     # 2 configs for the keyword task. We want top-2 by mean, ties by worst.
     rows = []
     # concept_relevant — config A wins (mean 0.7), B second (mean 0.6), C loses (0.4)
-    for brief, score in [("Plonts", 0.7), ("Data Fabric", 0.7), ("Board", 0.7)]:
+    for brief, score in [("brief-A", 0.7), ("brief-B", 0.7), ("brief-C", 0.7)]:
         rows.append({"brief_id": brief, "task": "concept_relevant",
                      "config_id": "A:product", "model_key": "haiku",
                      "run_id": 1, "cosine": score, "f1": None})
-    for brief, score in [("Plonts", 0.6), ("Data Fabric", 0.6), ("Board", 0.6)]:
+    for brief, score in [("brief-A", 0.6), ("brief-B", 0.6), ("brief-C", 0.6)]:
         rows.append({"brief_id": brief, "task": "concept_relevant",
                      "config_id": "A:audience", "model_key": "haiku",
                      "run_id": 1, "cosine": score, "f1": None})
-    for brief, score in [("Plonts", 0.4), ("Data Fabric", 0.4), ("Board", 0.4)]:
+    for brief, score in [("brief-A", 0.4), ("brief-B", 0.4), ("brief-C", 0.4)]:
         rows.append({"brief_id": brief, "task": "concept_relevant",
                      "config_id": "A:personality", "model_key": "haiku",
                      "run_id": 1, "cosine": score, "f1": None})
     # keyword task — version A wins by mean F1
-    for brief, f1 in [("Plonts", 0.75), ("Data Fabric", 0.75), ("Board", 0.75)]:
+    for brief, f1 in [("brief-A", 0.75), ("brief-B", 0.75), ("brief-C", 0.75)]:
         rows.append({"brief_id": brief, "task": "keywords",
                      "config_id": "A:_full_brief", "model_key": "haiku",
                      "run_id": 1, "cosine": None, "f1": f1})
-    for brief, f1 in [("Plonts", 0.50), ("Data Fabric", 0.50), ("Board", 0.50)]:
+    for brief, f1 in [("brief-A", 0.50), ("brief-B", 0.50), ("brief-C", 0.50)]:
         rows.append({"brief_id": brief, "task": "keywords",
                      "config_id": "B:_full_brief", "model_key": "haiku",
                      "run_id": 1, "cosine": None, "f1": f1})

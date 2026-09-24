@@ -1,7 +1,6 @@
 """
 Analysis pipeline.
-Pattern adapted from 毕设/250038039/experiments/analyze_final_results.py
-(matplotlib subplots + auto-label bars + groupby/agg/rename pattern).
+Uses matplotlib subplots with auto-labelled bars and a groupby/agg/rename summary.
 
 Reads:
   outputs/results.jsonl   (raw call results — produced by run_experiment.py)
@@ -102,7 +101,7 @@ def cmd_summarize():
         )
     scored = pd.read_csv(SCORED_CSV)
 
-    # Pattern from 毕设/analyze_final_results.py: groupby + agg + rename
+    # groupby + agg + rename
     summary = scored.groupby(["task", "config_id", "model_key"]).agg(
         n=("cosine", "count"),
         mean_cosine=("cosine", "mean"),
@@ -146,7 +145,7 @@ def plot_per_task_best(summary: pd.DataFrame) -> None:
         ax.set_title(task, fontsize=10)
         ax.set_ylabel("mean cosine")
         ax.grid(axis="y", alpha=0.3)
-        # Pattern from 毕设: auto-label bars
+        # Auto-label bars
         for bar, val in zip(bars, sub["mean_cosine"]):
             ax.text(
                 bar.get_x() + bar.get_width() / 2,

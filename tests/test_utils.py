@@ -30,8 +30,8 @@ def test_word_count_newlines():
 
 
 def test_word_count_real_gt_example():
-    # From briefs.yml: Plonts concept_relevant
-    s = "Promoting the harmonious coexistence of people and the planet through a spiritual and down-to-earth persona."
+    # A ground-truth-style sentence; hyphenated compounds count as one word.
+    s = "Approachable smart-home control that just works for busy renters who hate subscriptions and complicated setup."
     assert word_count(s) == 15
 
 

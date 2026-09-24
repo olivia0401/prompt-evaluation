@@ -233,3 +233,23 @@ class TestStageDedup:
             key = (c.task, c.config_id)
             assert key not in seen, f"duplicate: {key}"
             seen.add(key)
+
+
+class TestPhase0Briefs:
+    """Pilot briefs come from a flag in briefs.yml, never from names in code."""
+
+    def test_selects_flagged_briefs(self):
+        from src.prompt_builder import phase0_briefs
+        briefs = [{"current_name": f"b{i}", "phase0": i < 3} for i in range(6)]
+        assert [b["current_name"] for b in phase0_briefs(briefs)] == ["b0", "b1", "b2"]
+
+    def test_wrong_count_is_a_setup_error(self):
+        from src.prompt_builder import phase0_briefs
+        with pytest.raises(SystemExit, match="phase0: true"):
+            phase0_briefs([{"current_name": "only", "phase0": True}])
+
+    def test_truthy_strings_do_not_count(self):
+        from src.prompt_builder import phase0_briefs
+        briefs = [{"current_name": f"b{i}", "phase0": "yes"} for i in range(3)]
+        with pytest.raises(SystemExit):
+            phase0_briefs(briefs)

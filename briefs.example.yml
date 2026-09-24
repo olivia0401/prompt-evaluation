@@ -13,11 +13,16 @@
 #   character_count     (int) — target output length bucket
 #   keywords            (list[str]) — ground-truth keywords (exactly 10)
 #
+# Optional:
+#   phase0              (bool) — mark exactly 3 briefs `phase0: true` to form the
+#                         pilot set used by --stage phase0 and phase4
+#
 # Required ground-truth fields (one per extraction task — used to score outputs):
 #   concept_relevant, position_relevant, emotion_relevant, function_relevant,
 #   benefit_relevant,  category_relevant, feature_relevant, context_relevant
 
 - current_name: Acme Widget Co
+  phase0: true
   business_category: Consumer electronics, smart home devices
   product: >
     A line of voice-controlled smart home hubs that connect lights, locks

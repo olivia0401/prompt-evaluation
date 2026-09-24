@@ -43,3 +43,11 @@ promptfoo-real/results/
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+
+# Giskard scan reports (scripts/scan_giskard.py writes to lowercase results/)
+results/
+
+# Local-only notes and planning documents
+*.pdf
+promptfoo-demo/怎么跑_步骤.md
+.claude/
