@@ -37,6 +37,11 @@ def fields_of(label):
         return set(SEMANTIC)
     if "baseline" in label:
         return set()
+    # Older result files label recipes "single-product" / "pair-a+b"; the
+    # current configs use "product" / "a+b". Accept both.
+    for prefix in ("single-", "pair-"):
+        if label.startswith(prefix):
+            label = label[len(prefix):]
     return set(label.split("+"))
 
 

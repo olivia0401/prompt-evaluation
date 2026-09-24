@@ -57,7 +57,13 @@ docker compose up --build
 ```
 
 Put `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in `.env` — compose passes them to the
-api and worker containers. To run the async stack without Docker:
+api and worker containers. Two things the compose file does not do for you:
+runs need the confidential `briefs.yml`, which is kept out of the image (mount
+it into api and worker, or every run is marked FAILED), and authentication is
+off until you set `API_TOKEN` or `SERVICE_PRINCIPALS` (see below). Postgres and
+Redis are bound to `127.0.0.1` with throwaway credentials.
+
+To run the async stack without Docker:
 
 ```powershell
 $env:DATABASE_URL="postgresql+psycopg://evals:evals@localhost:5432/evals"
@@ -68,16 +74,27 @@ python -m service.worker                  # terminal 2
 
 ## API
 
+Every route except `/health` requires `Authorization: Bearer <key>` once keys
+are configured: `SERVICE_PRINCIPALS` (a JSON list of keys, each with a tenant
+and a role: admin / operator / viewer) or the single legacy `API_TOKEN` (admin
+on the `default` tenant). With neither set the API runs in **open mode**, where
+every caller is an admin; `GET /whoami` reports `open_mode` so this is visible.
+Reads are scoped to the caller's tenant, and another tenant's run returns 404.
+The dashboard sends `DASHBOARD_API_KEY` as its bearer token.
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET  | `/health` | liveness + queue mode (redis/inline) |
+| GET  | `/health` | liveness + queue mode (redis/inline); the only public route |
+| GET  | `/whoami` | the calling principal: name, tenant, role, `open_mode` |
 | GET  | `/stages` | available stages + default budgets |
-| POST | `/runs` | submit a run (`{stage, budget_usd?, max_calls?, concurrency?, note?}`) |
+| POST | `/quality-reports` | store a `quality-report/v1` with its gate decision (operator/admin) |
+| GET  | `/quality-reports` | list this tenant's quality reports |
+| POST | `/runs` | submit a run (`{stage, budget_usd?, max_calls?, concurrency?, note?}`; operator/admin) |
 | GET  | `/runs` | list runs (newest first; `?status=` `?limit=` `?offset=`) |
 | GET  | `/runs/{id}` | run detail (status, cost, counts) |
 | GET  | `/runs/{id}/results` | per-call results (paginated) |
 | GET  | `/runs/{id}/metrics` | ok-rate, cost/calls by model, tokens, latency |
-| POST | `/runs/{id}/cancel` | best-effort cancel of a *queued* run |
+| POST | `/runs/{id}/cancel` | best-effort cancel of a *queued* run (admin) |
 
 Runs are resume-safe: re-submitting the same work skips calls already completed
 OK for that run (same `(brief_id, task, config_id, model_key, run_index)` key).
@@ -85,20 +102,23 @@ OK for that run (same `(brief_id, task, config_id, model_key, run_index)` key).
 ## Eval CI gate
 
 `service/ci_gate.py` blocks a release when quality drops. It reduces
-`outputs/scored.csv` to one headline metric per task (the winning config's mean:
-cosine for sentence tasks, F1 for the keyword task) and compares to a committed
-baseline (`service/eval_baseline.json`).
+`outputs/scored.csv` to one headline metric per task (the mean of the config
+pinned in the baseline: cosine for sentence tasks, F1 for the keyword task) and
+compares it to the baseline in `service/eval_baseline.json`. When that file
+does not exist yet, the gate prints the current scores and exits 0.
 
 ```powershell
 python -m scripts.analyze --score            # produce scored.csv
 python -m service.ci_gate --update-baseline  # snapshot current as baseline (commit it)
 python -m service.ci_gate                     # exit 1 if any task regresses > tolerance
+python -m service.ci_gate --tolerance 0.05    # override the baseline's tolerance
 ```
 
-`.github/workflows/eval-gate.yml` runs the gate in CI; it self-skips (green)
-when no `scored.csv` is present, so wire it into the release pipeline where
-scoring actually runs. `outputs/` is gitignored, so the baseline JSON is the
-only committed artifact.
+**Current state:** no baseline is committed, and `outputs/` is gitignored, so
+`.github/workflows/eval-gate.yml` skips both gate steps (green) on every pull
+request in this repository. It becomes a real gate once it runs where
+`scored.csv` exists (a release pipeline with the briefs) and a baseline from
+`--update-baseline` is committed.
 
 ## Evidence-grounded quality gate
 
@@ -106,11 +126,15 @@ For systems that produce claims backed by sources, run a second gate against an
 annotated `quality-report/v1` JSON report:
 
 ```powershell
-python -m service.quality_gate outputs/quality_report.json
+python -m service.quality_gate outputs/quality_report.json --manifest data/golden/manifest.json
 ```
 
 The report must include `dataset_version`, `metrics` and `provenance` with both
-an evaluator version and a SHA-256 golden-manifest hash. Default floors are:
+an evaluator version and a SHA-256 golden-manifest hash; `--manifest` also checks
+that hash against the manifest file and every golden file against its recorded
+hash. Sample-size floors (≥ 30 claims, ≥ 30 judge ratings unless the judge
+metric is declared not applicable) are checked before the quality floors, which
+default to:
 groundedness ≥ 0.90, citation completeness ≥ 0.95, unsupported claims ≤ 0.05,
 entity-resolution F1 ≥ 0.90, source acceptable rate ≥ 0.90 and judge weighted
 κ ≥ 0.60. The thresholds are intentionally explicit and can be overridden by

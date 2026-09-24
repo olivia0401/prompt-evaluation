@@ -8,8 +8,10 @@ npx playwright test --grep @smoke      # tier 1 only
 npx playwright test --project=webkit   # one engine
 ```
 
-No setup beyond that: the config starts its own API on a throwaway SQLite
-database with the six personas configured, so there is nothing to run first.
+No setup beyond that: the config starts its own API on a dedicated SQLite
+database (`data/e2e.db`, separate from the dev database) with the six personas
+configured, so there is nothing to run first. The file is not wiped between
+local runs; every assertion is about runs created in the same test.
 
 ## Tiers
 

@@ -44,8 +44,8 @@ the point:
 | `score_evidence_chain` → `groundedness` | RAGAS `faithfulness`; DeepEval `FaithfulnessMetric` | Grounding requires a *gold-accepted* evidence item that also clears a source-quality floor. A claim resting only on weak evidence scores as ungrounded even when it is correct. |
 | `citation_completeness`, `evidence_precision` | RAGAS `context_precision` / `context_recall` family | Computed against human claim→evidence annotations, not against retrieval overlap. Lexical overlap is never treated as proof that a claim is true. |
 | `unsupported_claim_rate` | Hallucination rate; DeepEval `HallucinationMetric` | Reported as a rate with its denominator attached, and pooled (micro) rather than averaged across examples. |
-| `score_entity_resolution` | B-cubed F1 (Bagga & Baldwin), standard in coreference evaluation | Reports over-merge and under-merge separately, because a namesake collapse and a split identity are different product failures. |
-| `src/golden_manifest.py` | Dataset versioning; provenance / supply-chain integrity | SHA-256 per file, and the gate refuses any report that does not carry the manifest hash. A report that cannot name the bytes it scored is not auditable. |
+| `score_entity_resolution` | B-cubed F1 (Bagga & Baldwin), standard in coreference evaluation | Reports B-cubed precision and recall alongside F1: precision drops when distinct entities are merged (a namesake collapse), recall drops when one entity is split (a split identity), and those are different product failures. |
+| `src/golden_manifest.py` | Dataset versioning; provenance / supply-chain integrity | SHA-256 per file, and the gate refuses any report that does not carry a manifest hash; with `--manifest` it also checks that hash and every golden file against the committed manifest. A report that cannot name the bytes it scored is not auditable. |
 
 ### Judge calibration
 
@@ -53,7 +53,7 @@ the point:
 |---|---|---|
 | `weighted_kappa`, `calibrate_judge` | LLM-as-judge calibration; "human review alignment" in Braintrust / LangSmith | Reported under **both** linear and quadratic weighting, because they differ by up to 0.2 on the same ratings and a κ without its weighting scheme cannot be read. Category set fixed to the full scale, not inferred from observed values. Zero-variance input raises rather than returning 1.0. |
 | `scripts/rate_samples.py` | Human review / annotation UI | The judge's score and the automatic metric are hidden while rating, and order is shuffled. An anchored human agreeing with the judge is not evidence. A second pass gives intra-rater κ — the ceiling any judge-vs-human κ can honestly claim. |
-| `scripts/pairwise_judge.py` | Pairwise LLM-as-judge; the MT-Bench / Chatbot Arena methodology | A/B position swapped and averaged, so what is measured is preference and not position bias. |
+| `scripts/pairwise_judge.py` | Pairwise LLM-as-judge; the MT-Bench / Chatbot Arena methodology | Each pair is judged twice with A/B positions swapped; a winner is recorded only when both orders agree, otherwise the pair counts as a tie, so position bias cannot manufacture a preference. |
 
 ### Statistics — the layer the tools leave to you
 
@@ -69,7 +69,7 @@ the point:
 
 | Here | Called elsewhere | What is different |
 |---|---|---|
-| `service/ci_gate.py` | Eval regression gate; DeepEval's pytest assertions; Braintrust CI gates | Pins the baselined recipe instead of taking `max` over candidates (an order statistic that can silently describe a different recipe each run), and never gates tighter than measured noise. |
+| `service/ci_gate.py` | Eval regression gate; DeepEval's pytest assertions; Braintrust CI gates | Pins the baselined recipe instead of taking `max` over candidates (an order statistic that can silently describe a different recipe each run), and never gates tighter than measured noise. No baseline is committed yet, so in this public repo's CI it currently skips. |
 | `service/quality_gate.py` | Release gate | Sample-size floors run *before* threshold checks. Metrics may be excluded only by a declared reason, and declared exclusions print even on a PASS. |
 | `src/observability.py` | LLM tracing — Langfuse, aligning with OpenTelemetry GenAI semantic conventions | Off unless keys are set; no-op rather than a hard dependency. |
 | `scripts/scan_giskard.py` | LLM red-teaming / vulnerability scanning — Giskard, promptfoo redteam | Answers "how does it break", which is a different question from "how well does it score". |

@@ -138,3 +138,19 @@ def test_the_exported_queue_is_real_and_well_formed():
         assert "/" in item["stratum"]
     uncited = sum(1 for i in items if not i["evidence"])
     assert uncited > 0, "a queue with no uncited verdicts cannot exercise groundedness"
+
+
+def test_committed_manifest_covers_every_golden_file_and_verifies():
+    """Regression: the manifest once fingerprinted only README.md and
+    queue.jsonl, so edits to the annotations went undetected."""
+    import json
+    from pathlib import Path
+
+    from src.golden_manifest import verify_manifest
+
+    root = Path(__file__).resolve().parents[1] / "data" / "golden"
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    listed = {entry["path"] for entry in manifest["files"]}
+    on_disk = {p.name for p in root.iterdir() if p.is_file() and p.name != "manifest.json"}
+    assert listed == on_disk
+    assert verify_manifest(root, manifest) == []

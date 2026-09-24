@@ -1,12 +1,17 @@
 {
   "schema": "golden-manifest/v1",
-  "version": "2026.08.22",
-  "created_at": "2026-08-22T01:26:14+00:00",
+  "version": "2026.09.24",
+  "created_at": "2026-09-24T09:40:24+00:00",
   "files": [
     {
       "path": "README.md",
-      "sha256": "071eb58b4a32fbb1e76d9f093c7b0e12b3f850eacf1e03e35dfe1ff8ba5596e8",
-      "bytes": 4696
+      "sha256": "378716f80cc980513cb07d135b35493f65cc959e8b1dcb6d53efc3ddb2d1ffba",
+      "bytes": 5751
+    },
+    {
+      "path": "annotations_raw.jsonl",
+      "sha256": "ac1fb327b5ba4e4b000e290af5e249831f618b671143021999c968248038eaf6",
+      "bytes": 15305
     },
     {
       "path": "queue.jsonl",

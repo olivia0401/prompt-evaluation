@@ -5,8 +5,10 @@ pipeline (`../src`, `../scripts`, ~13k LOC) — with the industry-standard tool
 [promptfoo](https://www.promptfoo.dev/), as an independent check on whether two
 different toolchains reach the same conclusions.
 
-They do. That is the point: an independent method arriving at the same answers
-validates the custom pipeline's reliability.
+On the headline questions they agree (table below). Agreement from a second
+toolchain is a consistency check, not proof of correctness: both runs share the
+same briefs, prompts, ground truth and noise-floor rule, so it rules out
+implementation bugs in the custom scoring rather than validating the method.
 
 ## What promptfoo does vs. what stays custom
 
@@ -55,6 +57,9 @@ tests*.yaml, results/   gitignored — generated from confidential briefs.yml
 ```
 
 ## Run
+
+Needs Node (for `npx promptfoo`) plus `pip install scipy` for `analyze.py`;
+the other scripts use only the main requirements.
 
 ```bash
 python gen_tests.py

@@ -4,7 +4,7 @@ import { PERSONAS } from './personas';
 /**
  * Tiered browser suite.
  *
- * By default this starts its own API on a throwaway SQLite database with the
+ * By default this starts its own API on a dedicated SQLite database with the
  * six personas configured, so `npx playwright test` is one command with no
  * setup. Point E2E_BASE_URL at a deployed environment to run the same specs
  * against it — supply that environment's own persona keys through

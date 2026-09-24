@@ -6,7 +6,7 @@ name: Browser suite
 #   tier 2  full      3 engines, 6 personas,    every push (it is only ~10s)
 #           + isolation
 #
-# The suite starts its own API on a throwaway SQLite database with
+# The suite starts its own API on a fresh SQLite database (new checkout) with
 # DISABLE_RUN_EXECUTION=1, so it never contacts an LLM provider and needs no
 # provider keys. The persona keys are test fixtures committed in e2e/personas.ts;
 # a staging target supplies its own through E2E_PRINCIPALS as a secret.

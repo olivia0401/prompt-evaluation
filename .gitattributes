@@ -1,0 +1,3 @@
+# The golden set is fingerprinted byte-for-byte (data/golden/manifest.json), so
+# its line endings must not depend on the platform that checked it out.
+data/golden/** text eol=lf

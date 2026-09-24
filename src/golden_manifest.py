@@ -51,4 +51,6 @@ def verify_manifest(root: Path, manifest: dict) -> list[str]:
 
 def write_manifest(path: Path, manifest: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    # newline="\n": the manifest is itself hashed into every report, so its
+    # bytes must not depend on the OS that wrote it.
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")

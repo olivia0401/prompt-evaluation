@@ -26,6 +26,7 @@ catching the kind of "23 briefs" mismatch that misled an earlier review:
     D1. Sentence cells used by Tab 1: n_briefs ≥ 2 (else CI is undefined)
     D2. Length compliance ≥ 90% (PASS gate)
     D3. "Winner" diff vs second-best ≥ noise floor (0.036)
+    D4. Each task winner beats its runner-up on the same briefs (sign test)
 
   Group E — Scoring integrity
     E1. Every ok row in results.jsonl has a corresponding scored.csv row
@@ -42,7 +43,6 @@ catching the kind of "23 briefs" mismatch that misled an earlier review:
     G3. No API key leaks in raw_response (results.jsonl)
     G4. No PII (email / phone / credit card) in raw_response
     G5. .gitignore covers .env, credentials.json, outputs/, embedding_cache
-    G6. No `sk-...` / `sk-ant-...` tokens leaked in scored.csv predictions
 
   Group H — Output quality
     H1. Refusal rate ≤ 5% — "I cannot", "As an AI", "I don't have..."

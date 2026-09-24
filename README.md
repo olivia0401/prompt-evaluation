@@ -46,8 +46,9 @@ Each stage ends at a STOP gate that prints the deliverable URLs and the audit re
 
 - **Sentence tasks**: embedding cosine vs ground truth (primary) + ROUGE-L + length compliance.
   Embeddings use OpenAI `text-embedding-3-large` when `OPENAI_API_KEY` is set; with no key
-  the client auto-falls back to local `sentence-transformers/all-mpnet-base-v2` so scoring
-  still runs offline (scores stay comparable within a run, not across backends).
+  the client falls back to local `sentence-transformers/all-mpnet-base-v2` so scoring
+  still runs offline (scores stay comparable within a run, not across backends). The
+  fallback is an optional install: `pip install sentence-transformers`.
 - **Keyword task**: precision / recall / F1 on Porter-stemmed term sets.
 - **Noise floor** (`NOISE_FLOOR_COSINE`): 2σ of within-cell rerun cosine, re-measured
   across several briefs via `measure_noise.py`. Differences below it are ties.
@@ -56,7 +57,9 @@ Each stage ends at a STOP gate that prints the deliverable URLs and the audit re
 - **Leave-one-brief-out**: recomputes each task winner after dropping one brief at a time.
 - **Cohen's weighted κ**: AI-judge (Sonnet) vs human ratings, collected blind via
   `scripts/rate_samples.py` and reported under both linear and quadratic
-  weighting with a bootstrap CI. Below 30 pairs no headline κ is printed at all.
+  weighting with a bootstrap CI. Below 30 pairs no κ is reported, either by
+  `compute_kappa` (unless forced with `--allow-small`, marked provisional) or in the
+  workbook (`KAPPA_MIN_PAIRS` in `src/config.py`).
 
 ## Deliverable workbook (4 tabs)
 
@@ -97,6 +100,10 @@ cp .env.example .env                  # add OPENAI_API_KEY, ANTHROPIC_API_KEY
 python -m scripts.verify_models       # confirm model IDs/prices before publishing cost claims
 ```
 
+`briefs.yml` (client-confidential, gitignored) follows `briefs.example.yml`. Flag
+exactly three briefs with `phase0: true`; they form the pilot set for
+`--stage phase0` and `--stage phase4`.
+
 Google Sheets upload (optional): set `GOOGLE_SHEETS_ID` in `.env`, enable **both** the
 Drive API and Sheets API in one Google Cloud project, and drop an OAuth desktop
 `credentials.json` in the project root (first run opens a browser for consent).
@@ -117,7 +124,11 @@ docker compose up --build
 ```
 
 `service/ci_gate.py` is the eval regression gate (blocks a release when a task's
-score drops below the committed baseline). Two things it deliberately does:
+score drops below a baseline written by `ci_gate --update-baseline`). No baseline
+is committed yet and `outputs/scored.csv` is gitignored, so on this public repo
+`.github/workflows/eval-gate.yml` currently skips both gate steps (green) on
+every pull request; it becomes a real gate only where scored results exist.
+Two things it deliberately does:
 
 - **Scores the recipe the baseline names**, not the run's current best. Taking
   `max` over ~142 recipes is an order statistic — biased upward, noisier than
@@ -140,11 +151,11 @@ investigative or evidence-grounded outputs:
 - `src/quality_evaluators.py` measures citation completeness, groundedness,
   unsupported-claim rate, source quality, entity-resolution B-cubed F1, and
   ordinal judge/human calibration.
-- `src/golden_manifest.py` fingerprints golden files with SHA-256 so a report
-  cannot silently change its evaluation set.
+- `src/golden_manifest.py` fingerprints golden files with SHA-256.
 - `service/quality_gate.py` blocks a release unless the report carries its
   dataset version, evaluator version and golden-manifest hash, and meets the
-  configured quality floors.
+  configured quality floors. With `--manifest` it also rejects a report whose
+  hash does not match that manifest, or whose golden files have changed since.
 
 These metrics require explicit gold annotations; lexical similarity alone is
 not treated as proof that a claim is true.
@@ -157,15 +168,23 @@ scam / benign / health outcomes:
 
 ```bash
 cd ../parent-check && python export_eval_queue.py --output "../prompt test/data/golden/queue.jsonl"
-python -m scripts.annotate_golden --annotator <you>     # ~60-90 min
+python -m scripts.annotate_golden --annotator <you>     # one pass over 61 items
 python -m scripts.annotate_golden --agreement           # inter-annotator kappa
 python -m scripts.annotate_golden --build               # -> annotations.json
 ```
 
-**16 of the 61 verdicts cite no signal at all** — measurable before annotation
-begins, and a 26% ceiling on citation completeness. Those are the informative
-items: a correct call the engine cannot justify and a lucky guess are
-indistinguishable from outside, and only annotation separates them.
+**16 of the 61 verdicts (26%) cite no signal at all** — measurable before
+annotation begins, so citation completeness on this set can be at most 74%.
+Those are the informative items: a correct call the engine cannot justify and a
+lucky guess are indistinguishable from outside, and only annotation separates
+them.
+
+**Annotation status, stated plainly:** one pass exists, by one annotator, and
+it took 6 min 35 s for all 61 items (about 6.5 s per item). It marked every
+cited signal as supporting and every verdict as correct. That is a quick
+first pass that largely confirms the engine's own output, not an adjudicated
+gold set; no second annotator has been run, so there is no agreement figure
+yet. Numbers built from it demonstrate the pipeline, not the engine's quality.
 
 Three of the six gate metrics genuinely cannot be computed on this corpus. They
 are **declared** with a reason under `not_applicable` rather than omitted — the
@@ -178,9 +197,9 @@ Three properties the report and gate enforce:
 
 - **Rates are pooled, not averaged over examples.** A denominator-weighted
   (micro) rate is what gets gated; the macro mean is reported alongside so a
-  large gap between them is visible rather than hidden. On the seed set the
-  macro entity-resolution F1 (0.917) passes the 0.90 floor and the pooled one
-  (0.884) does not — averaging incomparable fractions had been buying a pass.
+  large gap between them is visible rather than hidden. When per-example
+  denominators are lopsided, the macro mean can clear a floor that the pooled
+  rate misses; averaging incomparable fractions would buy a pass.
 - **Judge kappa is computed once over pooled ratings.** Cohen's kappa is not an
   average-able quantity: on a single agreeing pair it returns 1.0, because
   expected agreement is also 1.0, so a mean of per-example kappas drifts upward
@@ -192,11 +211,11 @@ Three properties the report and gate enforce:
 Example usage:
 
 ```powershell
-python -m scripts.build_golden_manifest --root data/golden --output data/golden/manifest.json --version 2026.08.22
+python -m scripts.build_golden_manifest --root data/golden --output data/golden/manifest.json --version 2026.09.24
 python -m scripts.build_golden_manifest --root data/golden --verify data/golden/manifest.json
 python -m scripts.build_quality_report --input data/golden/annotations.json `
   --manifest data/golden/manifest.json --output outputs/quality_report.json
-python -m service.quality_gate outputs/quality_report.json
+python -m service.quality_gate outputs/quality_report.json --manifest data/golden/manifest.json
 python -m scripts.aggregate_quality_reports --inputs outputs/run_1.json outputs/run_2.json `
   --output outputs/quality_stability.json
 ```
