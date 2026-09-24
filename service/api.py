@@ -8,9 +8,11 @@ belonging to its own tenant, and a request for another tenant's run returns 404
 (not 403 - see service/auth.py for why).
 
 Endpoints:
-    GET  /health                      liveness + queue mode (public)
+    GET  /health                      liveness + queue mode (the only public route)
     GET  /whoami                      the calling principal: name, tenant, role
     GET  /stages                      available experiment stages
+    POST /quality-reports             store a quality-report/v1 + its gate decision
+    GET  /quality-reports             list this tenant's quality reports
     POST /runs                        submit a run (async via RQ, or inline)
     GET  /runs                        list runs (newest first)
     GET  /runs/{id}                   run detail
@@ -148,7 +150,7 @@ def list_quality_reports(
 
 
 @app.get("/stages")
-def stages():
+def stages(principal: Principal = Depends(current_principal)):
     from src import config as cfg
     from .runner import STAGE_BUDGET_KEY
 

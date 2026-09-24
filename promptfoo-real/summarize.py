@@ -16,7 +16,10 @@ if hasattr(sys.stdout, "reconfigure"):
 NOISE = 0.036
 SEMANTIC = ["product", "differentiators", "audience", "brand_strategy", "personality"]
 
-# custom pipeline's winning field set per task (from Results/*.xlsx)
+# Custom pipeline's published results, copied from the "Final Recommendations"
+# tab of the (gitignored) Results workbook: every task's noise-floor call was
+# "Tie: choose cheaper", and these are the recommended field sets.
+ORIG_TASKS_TIED = 8
 ORIG = {
     "concept":  {"brand_strategy"},
     "position": {"audience", "differentiators"},
@@ -67,6 +70,6 @@ for task, orig_fields in ORIG.items():
           f"{len(pool):<6}| {orig_name:<13} | {'yes' if match else '~'}")
 
 print("-" * 92)
-print(f"\ncustom:     8/8 tasks tied -> choose by cost")
-print(f"promptfoo:  {tie_count}/8 tasks tied")
-print(f"winner field-set exact match: {agree}/8")
+print(f"\ncustom:     {ORIG_TASKS_TIED}/{len(ORIG)} tasks tied -> choose by cost (from workbook)")
+print(f"promptfoo:  {tie_count}/{len(ORIG)} tasks tied")
+print(f"winner field-set exact match: {agree}/{len(ORIG)}")

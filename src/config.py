@@ -77,12 +77,12 @@ CONCURRENCY = {
 }
 
 # --- Model registry ---
-# After running scripts/verify_models.py, replace each `id` with the
-# verified value and append `# verified YYYY-MM-DD`.
+# IDs/prices marked "unverified" have not been confirmed against the provider.
+# Run scripts/verify_models.py, then mark each one `# verified YYYY-MM-DD`.
 MODELS = {
     "haiku": {
         "provider": "anthropic",
-        "id": "claude-haiku-4-5-20251001",  # TODO verify
+        "id": "claude-haiku-4-5-20251001",  # unverified
         "tier": "cheap",
         "params": {"temperature": 0, "max_tokens": 1000},
         "price_per_1m": {"input": 1.00, "output": 5.00},
@@ -91,7 +91,7 @@ MODELS = {
     },
     "gpt5mini": {
         "provider": "openai",
-        "id": "gpt-5-mini-2025-08-07",  # TODO verify
+        "id": "gpt-5-mini-2025-08-07",  # unverified
         "tier": "cheap",
         "params": {
             "reasoning_effort": "minimal",
@@ -105,7 +105,7 @@ MODELS = {
     },
     "sonnet": {
         "provider": "anthropic",
-        "id": "claude-sonnet-4-6",  # TODO verify — date looks future-dated
+        "id": "claude-sonnet-4-6",  # unverified
         "tier": "medium",
         "params": {"temperature": 0, "max_tokens": 1000},
         "price_per_1m": {"input": 3.00, "output": 15.00},
@@ -114,7 +114,7 @@ MODELS = {
     },
     "gpt5": {
         "provider": "openai",
-        "id": "gpt-5-2025-08-07",  # TODO verify
+        "id": "gpt-5-2025-08-07",  # unverified
         "tier": "medium",
         "params": {
             "reasoning_effort": "minimal",
@@ -136,7 +136,7 @@ MODELS = {
         # NOTE: Anthropic deprecated `temperature` on Opus 4.7 — passing it
         # returns 400 "temperature is deprecated for this model". Omit it.
         "params": {"max_tokens": 1000},
-        "price_per_1m": {"input": 15.00, "output": 75.00},  # TODO verify pricing
+        "price_per_1m": {"input": 15.00, "output": 75.00},  # price unverified
         "supports_seed": False,
         "is_reasoning_model": False,
     },
@@ -152,7 +152,7 @@ MODELS = {
             "seed": SEED,
             "max_completion_tokens": 1000,
         },
-        "price_per_1m": {"input": 2.50, "output": 20.00},  # TODO verify pricing
+        "price_per_1m": {"input": 2.50, "output": 20.00},  # price unverified
         "supports_seed": True,
         "is_reasoning_model": True,
     },
@@ -212,8 +212,13 @@ NOISE_FLOOR_COSINE = 0.036              # cosine diff below this = within noise
 # as "stable on this sample" only, never as "proven best".
 PAIRED_TEST_ALPHA = 0.05
 
+# Minimum paired ratings before any kappa is reported as a number. Shared by
+# scripts/compute_kappa.py, the workbook (scripts/build_xlsx.py) and the
+# release gate's judge-rating floor (service/quality_gate.py).
+KAPPA_MIN_PAIRS = 30
+
 # Cost/price provenance gate. Model IDs and per-token prices in MODELS are
-# still marked "# TODO verify". Until they are confirmed and this flag is
+# still marked "unverified". Until they are confirmed and this flag is
 # flipped to True, the workbook must hedge every cost-quality conclusion
 # ("provisional pricing") instead of stating it as fact.
 PRICES_VERIFIED = False

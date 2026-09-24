@@ -282,3 +282,28 @@ def test_ci_gate_tolerance_is_not_tighter_than_measured_noise():
     from service import ci_gate
 
     assert ci_gate.DEFAULT_TOLERANCE >= cfg.NOISE_FLOOR_COSINE
+
+
+def test_ci_gate_cli_tolerance_overrides_the_baseline(tmp_path, capsys):
+    """Regression: `--tolerance` used to be silently ignored whenever the
+    baseline file carried its own tolerance."""
+    import json
+
+    import pandas as pd
+
+    from service import ci_gate
+
+    scored = tmp_path / "scored.csv"
+    pd.DataFrame([
+        {"task": "t1", "config_id": "A:x", "model_key": "haiku", "status": "ok", "cosine": 0.80, "f1": None},
+    ]).to_csv(scored, index=False)
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "tolerance": 0.01, "min_ok_rate": 0.9,
+        "tasks": {"t1": {"metric": "cosine", "value": 0.85, "config": "A:x"}},
+    }), encoding="utf-8")
+
+    args = ["--scored", str(scored), "--baseline", str(baseline)]
+    assert ci_gate.main(args) == 1                         # 0.05 drop > baseline 0.01
+    assert ci_gate.main(args + ["--tolerance", "0.10"]) == 0  # CLI wins
+    assert "tolerance=0.1" in capsys.readouterr().out

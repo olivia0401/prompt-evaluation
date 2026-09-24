@@ -101,7 +101,7 @@ def test_open_mode_only_when_nothing_is_configured():
 
 def test_health_is_public_and_everything_else_is_not(client):
     assert client.get("/health").status_code == 200
-    for path in ("/whoami", "/runs", "/quality-reports"):
+    for path in ("/whoami", "/stages", "/runs", "/quality-reports"):
         assert client.get(path).status_code == 401, path
 
 

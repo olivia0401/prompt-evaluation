@@ -3,10 +3,12 @@ name: Eval gate
 # Release gate: fail if eval quality regressed vs service/eval_baseline.json.
 #
 # Scoring needs real API calls + the confidential briefs.yml, so this does NOT
-# score in CI. It runs the gate against a scored.csv you produce in your release
-# pipeline (or locally) and hand to this workflow as an artifact/commit. When no
-# scored.csv is present the job self-skips (green) so it never blocks unrelated
-# pushes — wire it into your actual release pipeline where scored.csv exists.
+# score in CI. outputs/ is gitignored and no baseline is committed yet, so on
+# this public repo both steps currently SKIP (green) on every pull request:
+#   - no scored.csv / quality report present -> the step prints a notice;
+#   - no service/eval_baseline.json -> ci_gate prints current scores, exits 0.
+# To make it a real gate, run it where scored.csv exists (a release pipeline
+# with the briefs) and commit a baseline from `ci_gate --update-baseline`.
 
 on:
   workflow_dispatch:
@@ -35,9 +37,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-service.txt
 
-      # `set -euo pipefail` + `bash -n` in the shell-lint step below: a gate
-      # whose own shell is broken is worse than no gate, because it fails for a
-      # reason that has nothing to do with quality.
+      # `set -euo pipefail`, and tests/test_workflows.py runs `bash -n` over
+      # every run block: a gate whose own shell is broken is worse than no
+      # gate, because it fails for a reason that has nothing to do with quality.
       - name: Run eval gate
         shell: bash
         run: |

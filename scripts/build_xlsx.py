@@ -4124,35 +4124,24 @@ def _existing_human_ratings() -> dict:
     return out
 
 
-def _weighted_kappa_quadratic(a: list, b: list) -> float:
-    """Cohen's weighted kappa (quadratic weights) — same formula as
-    scripts/compute_kappa.py. Pure-python, no sklearn."""
-    if len(a) != len(b) or not a:
-        return float("nan")
-    cats = sorted(set(a) | set(b))
-    k = len(cats)
-    if k < 2:
-        return 1.0
-    idx = {c: i for i, c in enumerate(cats)}
-    n = len(a)
-    O = [[0] * k for _ in range(k)]
-    for x, y in zip(a, b):
-        O[idx[x]][idx[y]] += 1
-    rt = [sum(r) for r in O]
-    ct = [sum(O[r][c] for r in range(k)) for c in range(k)]
-    E = [[rt[r] * ct[c] / n for c in range(k)] for r in range(k)]
-    dw = (k - 1) ** 2
-    W = [[((i - j) ** 2) / dw for j in range(k)] for i in range(k)]
-    num = sum(W[i][j] * O[i][j] for i in range(k) for j in range(k))
-    den = sum(W[i][j] * E[i][j] for i in range(k) for j in range(k))
-    return float("nan") if den == 0 else 1 - num / den
+def _shared_kappa(a: list, b: list, weights: str) -> float | None:
+    """Weighted kappa via the one shared implementation
+    (src.quality_evaluators.weighted_kappa): fixed 1..5 category set, and
+    None — not 1.0 — when kappa is undefined because the ratings have no
+    variance."""
+    from src.quality_evaluators import weighted_kappa
+    try:
+        return weighted_kappa(a, b, max_score=5, weights=weights)
+    except ValueError:
+        return None
 
 
 def _human_sonnet_kappa(scored: pd.DataFrame):
     """Real Human ↔ Sonnet weighted kappa from the (preserved) Human 1-5 column.
 
-    Returns (n_pairs, kappa) when at least 5 numeric Human/Sonnet pairs exist,
-    else None. Also writes outputs/kappa.json so Tab 1 and the standalone
+    Returns (n_pairs, kappa) when at least config.KAPPA_MIN_PAIRS numeric
+    Human/Sonnet pairs exist (the same floor as scripts/compute_kappa.py), else
+    None. Also writes outputs/kappa.json so Tab 1 and the standalone
     compute_kappa path stay in sync.
     """
     hr = _human_review_table(scored)
@@ -4166,10 +4155,10 @@ def _human_sonnet_kappa(scored: pd.DataFrame):
         if isinstance(s, (int, float)) and isinstance(h, (int, float)):
             a.append(int(round(s)))
             b.append(int(round(h)))
-    if len(a) < 5:
+    if len(a) < cfg.KAPPA_MIN_PAIRS:
         return None
-    kappa = _weighted_kappa_quadratic(a, b)
-    if kappa != kappa:  # NaN
+    kappa = _shared_kappa(b, a, "quadratic")
+    if kappa is None:
         return None
     try:
         import json as _json
@@ -4692,26 +4681,10 @@ def _sonnet_vs_cosine_kappa() -> tuple[int, float | None]:
             cos = float(cell["cosine"].mean())
             pairs.append((int(s), bin_cos(cos)))
 
-        if len(pairs) < 5:
+        if len(pairs) < cfg.KAPPA_MIN_PAIRS:
             return (len(pairs), None)
-
-        # Weighted kappa (linear) — pure numpy / no sklearn dependency.
-        k = 5
-        cm = np.zeros((k, k), dtype=int)
-        for a, b in pairs:
-            cm[a - 1][b - 1] += 1
-        N = cm.sum()
-        rs, cs = cm.sum(axis=1), cm.sum(axis=0)
-        expected = np.outer(rs, cs) / N
-        w = np.zeros((k, k))
-        for i in range(k):
-            for j in range(k):
-                w[i][j] = abs(i - j) / (k - 1)
-        p_o = 1 - (w * cm).sum() / N
-        p_e = 1 - (w * expected).sum() / N
-        if p_e == 1:
-            return (len(pairs), None)
-        return (len(pairs), float((p_o - p_e) / (1 - p_e)))
+        return (len(pairs), _shared_kappa([p[0] for p in pairs],
+                                          [p[1] for p in pairs], "linear"))
     except Exception:
         return (0, None)
 
@@ -4774,6 +4747,9 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
     # Fall back to the Sonnet-vs-cosine sanity check only when there are too
     # few human ratings to compute it.
     human_kappa = _human_sonnet_kappa(scored)
+    # Only computed when there is no human kappa; initialised here so the
+    # sanity-check note further down never hits an unbound name.
+    n_pairs, sanity_kappa = 0, None
 
     if human_kappa is not None:
         n_hk, k = human_kappa
@@ -4787,13 +4763,9 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
         else:
             interp_str = T("Low agreement — do not rely on the AI judge",
                             "一致性低 —— 不要依赖 AI 评委")
-        if n_hk < 30:
-            decision_str = T(
-                f"Based on {n_hk} human ratings (below the 30 minimum) — treat "
-                f"as preliminary; collect to at least 30 (60 preferred).",
-                f"基于 {n_hk} 条人工评分（未达 30 条最低门槛）—— 仅作初步参考；"
-                f"建议补到至少 30 条（最好 60 条）。")
-        elif n_hk < 60:
+        # _human_sonnet_kappa returns None below KAPPA_MIN_PAIRS (30), so
+        # n_hk >= 30 here.
+        if n_hk < 60:
             decision_str = T(
                 f"{n_hk} human ratings (≥30): if κ≥0.7 the AI judge may be used "
                 f"as a supporting scorer; 60 ratings preferred before full "
@@ -4810,7 +4782,7 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
         # No human ratings yet — show the Sonnet-vs-cosine sanity check, clearly
         # labelled as NOT human validation.
         n_pairs, sanity_kappa = _sonnet_vs_cosine_kappa()
-        if sanity_kappa is not None and n_pairs >= 5:
+        if sanity_kappa is not None and n_pairs >= cfg.KAPPA_MIN_PAIRS:
             kappa_str = f"{sanity_kappa:.2f}  (Sonnet vs cosine-bin sanity check)"
             if sanity_kappa >= 0.7:
                 interp_str = T("High agreement (sanity check only)",
@@ -4860,7 +4832,7 @@ def build_tab_human_validation(wb, scored: pd.DataFrame, raw: pd.DataFrame) -> N
     # (does Sonnet agree with cosine on what is good?), NOT a human↔AI
     # validation. Surfaced here as the only κ that can actually be computed
     # before human review.
-    if sanity_kappa is not None and n_pairs >= 5:
+    if sanity_kappa is not None and n_pairs >= cfg.KAPPA_MIN_PAIRS:
         if sanity_kappa >= 0.7:
             verdict = T("High agreement", "高度一致")
         elif sanity_kappa >= 0.4:

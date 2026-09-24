@@ -6,6 +6,11 @@ Streamlit dashboard over the evaluation API.
 Set API_BASE_URL (default http://localhost:8000) to point at the FastAPI app.
 It talks to the API over HTTP only — no direct DB access — so it works against
 a local or a deployed service unchanged.
+
+When the API requires keys (API_TOKEN or SERVICE_PRINCIPALS is set), give the
+dashboard one through DASHBOARD_API_KEY; it is sent as a bearer token. What
+the dashboard can see and do is then exactly what that key's tenant and role
+allow.
 """
 import os
 
@@ -14,19 +19,21 @@ import pandas as pd
 import streamlit as st
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_KEY = os.getenv("DASHBOARD_API_KEY", "")
+HEADERS = {"Authorization": f"Bearer {API_KEY}"} if API_KEY else {}
 TIMEOUT = 30.0
 
 st.set_page_config(page_title="Prompt Eval Dashboard", layout="wide")
 
 
 def api_get(path: str, **params):
-    r = httpx.get(f"{API_BASE_URL}{path}", params=params, timeout=TIMEOUT)
+    r = httpx.get(f"{API_BASE_URL}{path}", params=params, headers=HEADERS, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
 
 def api_post(path: str, json=None):
-    r = httpx.post(f"{API_BASE_URL}{path}", json=json, timeout=TIMEOUT)
+    r = httpx.post(f"{API_BASE_URL}{path}", json=json, headers=HEADERS, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 

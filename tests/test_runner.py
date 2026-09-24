@@ -254,3 +254,15 @@ def test_auto_build_dry_run_adds_dry_run_flag(monkeypatch):
 def test_auto_build_returns_empty_for_unknown_stage():
     runner = _import_runner()
     assert runner._auto_build_artifacts("stage_c", dry_run_build=False) == []
+
+
+def test_every_cli_stage_has_a_budget_cap():
+    """Regression: `--stage stage_c` used to be a CLI choice with no BUDGET_CAP
+    entry, so it crashed with a KeyError before reaching any stage logic."""
+    from src import config as cfg
+    from service.runner import STAGE_BUDGET_KEY as SERVICE_STAGES
+
+    runner = _import_runner()
+    for stage, key in runner.STAGE_BUDGET_KEY.items():
+        assert key in cfg.BUDGET_CAP, f"stage {stage!r} maps to missing cap {key!r}"
+    assert runner.STAGE_BUDGET_KEY == SERVICE_STAGES

@@ -29,7 +29,7 @@ test.describe('every persona authenticates as exactly itself', () => {
 
 test('health is the only public route @auth', async ({ request }) => {
   expect((await request.get('/health')).status()).toBe(200);
-  for (const path of ['/whoami', '/runs', '/quality-reports']) {
+  for (const path of ['/whoami', '/stages', '/runs', '/quality-reports']) {
     expect((await request.get(path)).status(), `${path} must require a key`).toBe(401);
   }
 });

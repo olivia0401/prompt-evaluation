@@ -141,10 +141,11 @@ def build_todo(stage: str) -> list[dict]:
     Stage definitions:
       phase0  : pilot briefs flagged `phase0: true` (3) x 17 configs x 2 cheap models x 1 run
       stage_a : 23 briefs x all-phase configs x 2 cheap models x 1 run
-      stage_b : caller passes shortlisted configs via a separate flow (NotImplementedError)
+      stage_b : top-2 configs per task from scored Stage-A results x 23 briefs x
+                2 cheap models x runs 2-3 (needs outputs/scored.csv)
       phase4  : top-1 config per task (from summary_by_config.csv) x curated brief
                 subset x 2 PREMIUM models. Bound to ≤£1 by config.BUDGET_CAP.
-      stage_c : same, for medium models x 3 runs (deferred)
+      stage_c : medium models x 3 runs (not implemented; not exposed on the CLI)
 
     Resume / dedup happens at the runner level (load_done_keys filters out
     completed entries before any API call).
@@ -316,12 +317,22 @@ def build_todo(stage: str) -> list[dict]:
     return todo
 
 
+# CLI stage -> config.BUDGET_CAP key. The single source for which stages can be
+# run; service/runner.py mirrors it and tests/test_runner.py keeps them in sync.
+STAGE_BUDGET_KEY = {
+    "phase0":  "phase_0",
+    "stage_a": "phase_1",            # Stage A covers Phases 1-3; phase_1 cap is the largest
+    "stage_b": "stage_b",
+    "phase4":  "phase_4_premium",    # Hard-bounded to <=£1 (project rule)
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--stage",
         required=True,
-        choices=["phase0", "stage_a", "stage_b", "phase4", "stage_c"],
+        choices=list(STAGE_BUDGET_KEY),
         help=(
             "phase0  = pilot on 3 briefs (cheap models). "
             "stage_a = Phases 1-3 on 23 briefs (cheap). "
@@ -363,13 +374,7 @@ def main():
                          "Useful to preview before committing to a Drive upload.")
     args = ap.parse_args()
 
-    stage_key = {
-        "phase0":  "phase_0",
-        "stage_a": "phase_1",            # Stage A covers Phases 1-3; phase_1 cap is the largest
-        "stage_b": "stage_b",
-        "phase4":  "phase_4_premium",    # Hard-bounded to ≤£1 (project rule)
-        "stage_c": "stage_c",
-    }[args.stage]
+    stage_key = STAGE_BUDGET_KEY[args.stage]
     budget = args.budget_usd if args.budget_usd is not None else cfg.BUDGET_CAP[stage_key]
 
     client = LLMClient.from_env(

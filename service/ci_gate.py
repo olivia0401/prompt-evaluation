@@ -130,10 +130,18 @@ def write_baseline(path: Path, metrics: dict, *, tolerance: float, min_ok_rate: 
     print(f"Wrote baseline -> {path} ({len(payload['tasks'])} tasks)")
 
 
-def check(metrics: dict, baseline: dict) -> tuple[bool, list[str]]:
-    """Return (passed, lines). A missing baseline passes (nothing to regress from)."""
-    tolerance = baseline.get("tolerance", DEFAULT_TOLERANCE)
-    min_ok_rate = baseline.get("min_ok_rate", DEFAULT_MIN_OK_RATE)
+def check(metrics: dict, baseline: dict, *, tolerance: float | None = None,
+          min_ok_rate: float | None = None) -> tuple[bool, list[str]]:
+    """Return (passed, lines). A missing baseline passes (nothing to regress from).
+
+    ``tolerance`` / ``min_ok_rate`` given explicitly (e.g. from the CLI) win over
+    the values stored in the baseline; otherwise the baseline's values apply,
+    then the module defaults.
+    """
+    if tolerance is None:
+        tolerance = baseline.get("tolerance", DEFAULT_TOLERANCE)
+    if min_ok_rate is None:
+        min_ok_rate = baseline.get("min_ok_rate", DEFAULT_MIN_OK_RATE)
     base_tasks = baseline.get("tasks", {})
 
     lines: list[str] = []
@@ -181,8 +189,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Eval regression gate.")
     ap.add_argument("--scored", type=Path, default=cfg.OUTPUTS_DIR / "scored.csv")
     ap.add_argument("--baseline", type=Path, default=BASELINE_PATH)
-    ap.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
-    ap.add_argument("--min-ok-rate", type=float, default=DEFAULT_MIN_OK_RATE)
+    ap.add_argument("--tolerance", type=float, default=None,
+                    help="Override the baseline's tolerance "
+                         f"(default: baseline value, else {DEFAULT_TOLERANCE}).")
+    ap.add_argument("--min-ok-rate", type=float, default=None,
+                    help="Override the baseline's min ok-rate "
+                         f"(default: baseline value, else {DEFAULT_MIN_OK_RATE}).")
     ap.add_argument("--update-baseline", action="store_true",
                     help="Write current metrics as the new baseline and exit 0.")
     args = ap.parse_args(argv)
@@ -199,7 +211,11 @@ def main(argv=None) -> int:
     metrics = compute_metrics(args.scored, pinned=pinned)
 
     if args.update_baseline:
-        write_baseline(args.baseline, metrics, tolerance=args.tolerance, min_ok_rate=args.min_ok_rate)
+        write_baseline(
+            args.baseline, metrics,
+            tolerance=DEFAULT_TOLERANCE if args.tolerance is None else args.tolerance,
+            min_ok_rate=DEFAULT_MIN_OK_RATE if args.min_ok_rate is None else args.min_ok_rate,
+        )
         return 0
 
     if not baseline:
@@ -209,7 +225,8 @@ def main(argv=None) -> int:
             print(f"  {t:22s} {m['metric']:7s} {m['value']:.4f}  [{m.get('config')}]")
         return 0
 
-    passed, lines = check(metrics, baseline)
+    passed, lines = check(metrics, baseline, tolerance=args.tolerance,
+                          min_ok_rate=args.min_ok_rate)
     print("\n".join(lines))
     return 0 if passed else 1
 

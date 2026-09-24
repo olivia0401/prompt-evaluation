@@ -20,7 +20,8 @@ from . import settings
 from .db import SessionLocal
 from .models import CallResultRow, Run, RunStatus
 
-# stage -> config.BUDGET_CAP key (mirrors scripts.run_experiment.main)
+# stage -> config.BUDGET_CAP key (mirrors scripts.run_experiment.STAGE_BUDGET_KEY;
+# tests/test_runner.py fails if the two drift apart)
 STAGE_BUDGET_KEY = {
     "phase0": "phase_0",
     "stage_a": "phase_1",

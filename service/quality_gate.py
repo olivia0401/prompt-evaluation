@@ -7,6 +7,11 @@ the evaluator provenance, making a green build auditable.
 Usage::
 
     python -m service.quality_gate quality_report.json
+    python -m service.quality_gate quality_report.json --manifest data/golden/manifest.json
+
+Without ``--manifest`` the gate only checks that the report *names* a golden
+manifest hash. With it, the gate also checks that the hash matches that
+manifest file and that every file the manifest lists is unchanged on disk.
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ DEFAULT_THRESHOLDS = {
     # Sample-size floors. A metric computed on 3 claims can clear any threshold
     # by luck, so a green tick on a tiny denominator is not evidence — it is an
     # absence of evidence wearing the same colour. The 30-rating floor for the
-    # judge matches the plan's kappa rule (§2 of the evaluation plan).
+    # judge matches config.KAPPA_MIN_PAIRS (used by scripts/compute_kappa.py).
     "min_claims": 30,
     "min_judge_ratings": 30,
 }
@@ -106,12 +111,42 @@ def check_report(report: dict, thresholds: dict | None = None) -> tuple[bool, li
     return not errors, errors
 
 
+def check_provenance(report: dict, manifest_path: Path) -> list[str]:
+    """Check the report was scored against exactly this golden manifest.
+
+    Two checks: the report's ``golden_manifest_sha256`` equals the SHA-256 of
+    ``manifest_path``, and every file the manifest lists (resolved relative to
+    the manifest's directory) still has the recorded hash.
+    """
+    from src.golden_manifest import sha256_file, verify_manifest
+
+    if not manifest_path.is_file():
+        return [f"manifest not found: {manifest_path}"]
+    errors: list[str] = []
+    claimed = (report.get("provenance") or {}).get("golden_manifest_sha256")
+    actual = sha256_file(manifest_path)
+    if claimed != actual:
+        errors.append(
+            f"golden_manifest_sha256 mismatch: report says {claimed!r}, "
+            f"{manifest_path.name} is {actual}"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    errors.extend(f"golden set drift: {e}" for e in verify_manifest(manifest_path.parent, manifest))
+    return errors
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Check a quality-report/v1 JSON file.")
     parser.add_argument("report", type=Path)
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="Golden manifest the report must have been scored against.")
     args = parser.parse_args(argv)
     report = json.loads(args.report.read_text(encoding="utf-8"))
     passed, messages = check_report(report)
+    if args.manifest is not None:
+        provenance_errors = check_provenance(report, args.manifest)
+        passed = passed and not provenance_errors
+        messages = messages + provenance_errors
     print("QUALITY GATE: PASS" if passed else "QUALITY GATE: FAIL")
     for message in messages:
         print(f"- {message}")

@@ -6,8 +6,15 @@
 # Dashboard-> http://localhost:8501
 #
 # Put OPENAI_API_KEY / ANTHROPIC_API_KEY in .env (compose reads it automatically);
-# the api and worker containers inherit them. Without keys the stack still boots
-# and runs, but LLM calls come back as api_error rows.
+# the api and worker containers inherit them.
+#
+# Caveats for this local stack:
+# - Runs need the confidential briefs.yml, which .dockerignore keeps out of the
+#   image. Without it a submitted run is marked FAILED. To run real stages,
+#   mount it into both api and worker, e.g. `- ./briefs.yml:/app/briefs.yml:ro`.
+# - Authentication is off unless API_TOKEN or SERVICE_PRINCIPALS is set in .env
+#   (open mode: every caller is an admin). Set DASHBOARD_API_KEY to match.
+# - Postgres/Redis use throwaway credentials and are bound to 127.0.0.1 only.
 
 services:
   postgres:
@@ -17,7 +24,7 @@ services:
       POSTGRES_PASSWORD: evals
       POSTGRES_DB: evals
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -29,7 +36,7 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -44,6 +51,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      API_TOKEN: ${API_TOKEN:-}
+      SERVICE_PRINCIPALS: ${SERVICE_PRINCIPALS:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -71,6 +80,7 @@ services:
     command: streamlit run service/dashboard.py --server.port 8501 --server.address 0.0.0.0
     environment:
       API_BASE_URL: http://api:8000
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
     ports:
       - "8501:8501"
     depends_on:

@@ -193,3 +193,23 @@ def test_intra_rater_pass_two_is_reported_as_the_ceiling(kappa_env, capsys):
     assert "intra-rater kappa" in out
     payload = json.loads(kappa_env["kappa"].read_text(encoding="utf-8"))
     assert payload["intra_rater_kappa_linear"] is not None
+
+
+def test_workbook_kappa_uses_the_shared_implementation():
+    """Regression: build_xlsx had its own kappa that inferred the category set
+    from observed ratings and returned 1.0 on zero-variance input."""
+    from scripts.build_xlsx import _shared_kappa
+    from src.quality_evaluators import weighted_kappa
+
+    human = [1, 2, 5, 5, 1, 2, 5, 1]   # "3" and "4" never used
+    judge = [2, 1, 5, 2, 1, 5, 5, 2]
+    assert _shared_kappa(human, judge, "linear") == weighted_kappa(human, judge, weights="linear")
+    assert _shared_kappa([4, 4, 4], [4, 4, 4], "quadratic") is None
+
+
+def test_workbook_and_cli_share_one_pair_floor():
+    from scripts import compute_kappa
+    from service.quality_gate import DEFAULT_THRESHOLDS
+    from src import config as cfg
+
+    assert compute_kappa.MIN_PAIRS == cfg.KAPPA_MIN_PAIRS == DEFAULT_THRESHOLDS["min_judge_ratings"]

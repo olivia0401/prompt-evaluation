@@ -67,3 +67,50 @@ def test_quality_gate_requires_denominators():
     passed, errors = check_report(report)
     assert not passed
     assert any("missing denominator" in e for e in errors)
+
+
+def _golden_dir(tmp_path):
+    import json
+
+    from src.golden_manifest import build_manifest, sha256_file, write_manifest
+
+    root = tmp_path / "golden"
+    root.mkdir()
+    (root / "queue.jsonl").write_text('{"item_id": "x"}\n', encoding="utf-8")
+    manifest_path = root / "manifest.json"
+    write_manifest(manifest_path, build_manifest(root, [root / "queue.jsonl"], "t"))
+    report = _report()
+    report["provenance"]["golden_manifest_sha256"] = sha256_file(manifest_path)
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return root, manifest_path, report_path
+
+
+def test_manifest_check_passes_when_report_names_this_manifest(tmp_path):
+    from service.quality_gate import main
+
+    _root, manifest_path, report_path = _golden_dir(tmp_path)
+    assert main([str(report_path), "--manifest", str(manifest_path)]) == 0
+
+
+def test_manifest_check_rejects_a_hash_that_does_not_match(tmp_path):
+    """Regression: without --manifest any non-empty string (e.g. 'abc') passes."""
+    import json
+
+    from service.quality_gate import main
+
+    _root, manifest_path, report_path = _golden_dir(tmp_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["provenance"]["golden_manifest_sha256"] = "abc"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    assert main([str(report_path)]) == 0
+    assert main([str(report_path), "--manifest", str(manifest_path)]) == 1
+
+
+def test_manifest_check_detects_golden_file_drift(tmp_path, capsys):
+    from service.quality_gate import main
+
+    root, manifest_path, report_path = _golden_dir(tmp_path)
+    (root / "queue.jsonl").write_text('{"item_id": "edited"}\n', encoding="utf-8")
+    assert main([str(report_path), "--manifest", str(manifest_path)]) == 1
+    assert "golden set drift: changed: queue.jsonl" in capsys.readouterr().out

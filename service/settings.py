@@ -47,10 +47,11 @@ MIRROR_TO_JSONL = os.getenv("MIRROR_TO_JSONL", "1").lower() in {"1", "true", "ye
 API_TITLE = "Prompt Evaluation Service"
 API_VERSION = "0.1.0"
 
-# Optional bearer token guarding the cost-incurring / state-changing routes
-# (POST /runs, cancel). When empty (the default) the API is open — fine for
-# local dev and tests. Set API_TOKEN in the environment before exposing the
-# service publicly, or anyone who can reach it could spend your LLM budget.
+# Optional single bearer token (admin on the "default" tenant) guarding every
+# route except GET /health. Ignored when SERVICE_PRINCIPALS is set. When both
+# are empty (the default) the API runs open — fine for local dev and tests.
+# Set one before exposing the service, or anyone who can reach it could spend
+# your LLM budget.
 API_TOKEN = os.getenv("API_TOKEN", "")
 
 # Multi-tenant principals as a JSON array; see service/auth.py.

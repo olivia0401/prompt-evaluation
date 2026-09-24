@@ -61,8 +61,9 @@ export default defineConfig({
             // while guaranteeing no provider is ever contacted, so the browser
             // suite costs nothing and needs no LLM keys.
             DISABLE_RUN_EXECUTION: '1',
-            // A file per run: a suite that inherits the previous run's rows
-            // cannot make an honest assertion about what a tenant can see.
+            // A dedicated database, separate from the dev data/service.db. It
+            // is not wiped between local runs, so every assertion is written
+            // against runs created in the same test, never against totals.
             DATABASE_URL: 'sqlite:///./data/e2e.db',
             PYTHONUTF8: '1',
           },
