@@ -1,0 +1,54 @@
+# ============================================================================
+# 这是你 prompt test 实验的「promptfoo 最小版」。
+# 它做的事和你手写的 run_experiment.py + evaluators.py 一样,只是全部内置。
+#
+# 你原来手写的            promptfoo 里对应的
+# ---------------------   -----------------------------
+# run_experiment.py       promptfoo 自己跑批(下面的 providers × tests)
+# 8 个任务 prompt          prompts: (这里只放 1 个作示范)
+# 多模型对比               providers: (这里放 2 个模型)
+# evaluators.py 的 cosine  assert: type: similar (语义相似度,内置)
+# 23 个 brief             tests: (这里放 3 个作示范)
+#
+# 你手写但 promptfoo 没有的(= 你的价值,留着):
+#   stats.py 的配对检验 / noise floor / Cohen's κ / 32 项审计
+# ============================================================================
+
+description: "Concept-Relevant 提取任务 — gpt-4o-mini vs gpt-4o"
+
+# --- 题目:一个任务的 prompt。{{brand_strategy}} 会被下面每个 test 的值替换 ---
+prompts:
+  - |
+    You are a brand strategy consultant interpreting a company's description of
+    their brand strategy below. Identify the single most important idea — the one
+    that, if removed, would make the brand unrecognizable — and distill it into
+    one sentence. Write only the sentence, 10-20 words, no preamble, no quotes.
+
+    Brand strategy:
+    {{brand_strategy}}
+
+# --- 考生:两个模型。promptfoo 会让每个模型答每道题 ---
+providers:
+  - openai:gpt-4o-mini
+  - openai:gpt-4o
+
+# --- 打分规则:对每道题都用「语义相似度」比标准答案。这就是你的 cosine ---
+defaultTest:
+  assert:
+    - type: similar
+      value: "{{concept_relevant}}"   # concept_relevant = 标准答案
+      threshold: 0.7                   # 相似度 ≥0.7 算通过
+
+# --- 题库:3 个 brief。每个带输入(brand_strategy)和标准答案(concept_relevant) ---
+tests:
+  - vars:
+      brand_strategy: "Friendly tech that respects your time. Approachable, low-fuss, with a sense of humour."
+      concept_relevant: "Approachable smart-home control that just works."
+
+  - vars:
+      brand_strategy: "Specialty coffee delivered on your schedule, roasted to order. For people who take their morning ritual seriously but hate running out."
+      concept_relevant: "Freshly-roasted specialty coffee that never runs out."
+
+  - vars:
+      brand_strategy: "Short, science-backed workouts for busy people. No gym, no equipment, no guilt — just fifteen minutes that actually fit your life."
+      concept_relevant: "Quick science-based workouts that fit a busy life."

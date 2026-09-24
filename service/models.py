@@ -48,6 +48,10 @@ class Run(Base):
     __tablename__ = "runs"
 
     id = Column(String(32), primary_key=True, default=_uuid)
+    # Tenancy is a column, not a convention. Every read path filters on it, so a
+    # route that forgets to scope returns nothing rather than everything.
+    tenant_id = Column(String(64), nullable=False, default="default", index=True)
+    created_by = Column(String(64), nullable=True)   # principal name, for the audit trail
     stage = Column(String(32), nullable=False)
     status = Column(String(24), nullable=False, default=RunStatus.QUEUED, index=True)
 
@@ -78,6 +82,8 @@ class Run(Base):
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "tenant_id": self.tenant_id,
+            "created_by": self.created_by,
             "stage": self.stage,
             "status": self.status,
             "budget_usd": self.budget_usd,
@@ -186,6 +192,8 @@ class QualityReport(Base):
     __tablename__ = "quality_reports"
 
     id = Column(String(32), primary_key=True, default=_uuid)
+    tenant_id = Column(String(64), nullable=False, default="default", index=True)
+    created_by = Column(String(64), nullable=True)
     dataset_version = Column(String(128), nullable=False, index=True)
     evaluator_version = Column(String(128), nullable=False)
     passed = Column(Integer, nullable=False, default=0)
@@ -196,6 +204,8 @@ class QualityReport(Base):
         report = json.loads(self.report_json)
         return {
             "id": self.id,
+            "tenant_id": self.tenant_id,
+            "created_by": self.created_by,
             "dataset_version": self.dataset_version,
             "evaluator_version": self.evaluator_version,
             "passed": bool(self.passed),

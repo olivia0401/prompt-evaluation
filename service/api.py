@@ -3,8 +3,13 @@ FastAPI surface over the evaluation engine.
 
     uvicorn service.api:app --reload
 
+Every route below /health is tenant-scoped: a principal only ever sees rows
+belonging to its own tenant, and a request for another tenant's run returns 404
+(not 403 - see service/auth.py for why).
+
 Endpoints:
-    GET  /health                      liveness + queue mode
+    GET  /health                      liveness + queue mode (public)
+    GET  /whoami                      the calling principal: name, tenant, role
     GET  /stages                      available experiment stages
     POST /runs                        submit a run (async via RQ, or inline)
     GET  /runs                        list runs (newest first)
@@ -13,7 +18,6 @@ Endpoints:
     GET  /runs/{id}/metrics           operational metrics for the run
     POST /runs/{id}/cancel            best-effort cancel of a queued run
 """
-import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -21,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from . import repository as repo
 from . import settings
+from .auth import ANONYMOUS_ADMIN, Principal, load_registry
 from .db import SessionLocal, init_db
 from .models import RunStatus
 from .schemas import QualityReportIn, QualityReportOut, RunCreate, RunMetrics, RunOut
@@ -44,18 +49,54 @@ def get_db() -> Session:
         db.close()
 
 
-def require_auth(authorization: str | None = Header(default=None)):
-    """Guard cost-incurring / state-changing routes with a bearer token.
+def get_registry():
+    """Resolved per request so tests (and key rotation) can change the roster."""
+    return load_registry()
 
-    No-op when settings.API_TOKEN is empty (local dev, tests). When it is set,
-    requires `Authorization: Bearer <token>`, compared in constant time.
+
+def current_principal(authorization: str | None = Header(default=None)) -> Principal:
+    """Resolve the caller. 401 when a key is required and missing or wrong.
+
+    In open mode (no keys configured at all) every caller is an admin on the
+    `default` tenant - the local-dev and unit-test posture. That is a
+    deliberate, documented default rather than an accident: `GET /whoami`
+    reports `"open_mode": true`, so it is visible rather than assumed.
     """
-    expected = settings.API_TOKEN
-    if not expected:
-        return
+    registry = get_registry()
+    if registry.open_mode:
+        return ANONYMOUS_ADMIN
     scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(token, expected):
+    if scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Missing or invalid bearer token")
+    principal = registry.resolve(token)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Missing or invalid bearer token")
+    return principal
+
+
+def require_write(principal: Principal = Depends(current_principal)) -> Principal:
+    """Create/submit routes. A viewer is authenticated but not authorised: 403.
+
+    403 is right here and 404 is right for cross-tenant, and the difference is
+    the point: within your own tenant you already know the resource exists, so
+    refusing loudly leaks nothing and tells the caller something useful.
+    """
+    if not principal.may_write:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{principal.role}' cannot write. Requires operator or admin.",
+        )
+    return principal
+
+
+def require_cancel(principal: Principal = Depends(current_principal)) -> Principal:
+    """Cancelling destroys in-flight work and is admin-only."""
+    if not principal.may_cancel:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role '{principal.role}' cannot cancel a run. Requires admin.",
+        )
+    return principal
 
 
 @app.get("/health")
@@ -68,16 +109,28 @@ def health():
     }
 
 
-@app.post("/quality-reports", response_model=QualityReportOut, status_code=201,
-          dependencies=[Depends(require_auth)])
-def create_quality_report(body: QualityReportIn, db: Session = Depends(get_db)):
+@app.get("/whoami")
+def whoami(principal: Principal = Depends(current_principal)):
+    """Who the presented key says you are.
+
+    The first thing to check when an isolation test fails: the wrong persona is
+    a far more common cause than a bug in the scoping.
+    """
+    return {**principal.to_dict(), "open_mode": get_registry().open_mode}
+
+
+@app.post("/quality-reports", response_model=QualityReportOut, status_code=201)
+def create_quality_report(body: QualityReportIn, db: Session = Depends(get_db),
+                          principal: Principal = Depends(require_write)):
     """Store a quality snapshot and return its release-gate decision."""
     from service.quality_gate import check_report
 
     passed, errors = check_report(body.report)
     report = dict(body.report)
     report["gate_errors"] = errors
-    row = repo.create_quality_report(db, report, passed)
+    row = repo.create_quality_report(db, report, passed,
+                                     tenant_id=principal.tenant_id,
+                                     created_by=principal.name)
     db.commit()
     return QualityReportOut(**row.to_dict())
 
@@ -85,11 +138,13 @@ def create_quality_report(body: QualityReportIn, db: Session = Depends(get_db)):
 @app.get("/quality-reports", response_model=list[QualityReportOut])
 def list_quality_reports(
     db: Session = Depends(get_db),
+    principal: Principal = Depends(current_principal),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     return [QualityReportOut(**row.to_dict())
-            for row in repo.list_quality_reports(db, limit=limit, offset=offset)]
+            for row in repo.list_quality_reports(db, tenant_id=principal.tenant_id,
+                                                 limit=limit, offset=offset)]
 
 
 @app.get("/stages")
@@ -103,8 +158,9 @@ def stages():
     return {"stages": out}
 
 
-@app.post("/runs", response_model=RunOut, status_code=201, dependencies=[Depends(require_auth)])
-def create_run(body: RunCreate, db: Session = Depends(get_db)):
+@app.post("/runs", response_model=RunOut, status_code=201)
+def create_run(body: RunCreate, db: Session = Depends(get_db),
+               principal: Principal = Depends(require_write)):
     from .runner import STAGE_BUDGET_KEY
 
     if body.stage not in STAGE_BUDGET_KEY:
@@ -112,6 +168,8 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)):
 
     run = repo.create_run(
         db,
+        tenant_id=principal.tenant_id,
+        created_by=principal.name,
         stage=body.stage,
         budget_usd=body.budget_usd,
         max_calls=body.max_calls,
@@ -125,24 +183,27 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)):
     # so refresh ours afterwards to return the up-to-date row.
     enqueue_run(run_id)
     db.expire_all()
-    run = repo.get_run(db, run_id)
+    run = repo.get_run(db, run_id, tenant_id=principal.tenant_id)
     return RunOut(**run.to_dict())
 
 
 @app.get("/runs", response_model=list[RunOut])
 def list_runs(
     db: Session = Depends(get_db),
+    principal: Principal = Depends(current_principal),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     status: str | None = Query(None),
 ):
-    runs = repo.list_runs(db, limit=limit, offset=offset, status=status)
+    runs = repo.list_runs(db, tenant_id=principal.tenant_id,
+                          limit=limit, offset=offset, status=status)
     return [RunOut(**r.to_dict()) for r in runs]
 
 
 @app.get("/runs/{run_id}", response_model=RunOut)
-def get_run(run_id: str, db: Session = Depends(get_db)):
-    run = repo.get_run(db, run_id)
+def get_run(run_id: str, db: Session = Depends(get_db),
+            principal: Principal = Depends(current_principal)):
+    run = repo.get_run(db, run_id, tenant_id=principal.tenant_id)
     if run is None:
         raise HTTPException(404, f"Run {run_id} not found")
     return RunOut(**run.to_dict())
@@ -152,26 +213,30 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 def get_results(
     run_id: str,
     db: Session = Depends(get_db),
+    principal: Principal = Depends(current_principal),
     limit: int = Query(500, ge=1, le=5000),
     offset: int = Query(0, ge=0),
     status: str | None = Query(None),
 ):
-    if repo.get_run(db, run_id) is None:
+    if repo.get_run(db, run_id, tenant_id=principal.tenant_id) is None:
         raise HTTPException(404, f"Run {run_id} not found")
-    rows = repo.list_results(db, run_id, limit=limit, offset=offset, status=status)
+    rows = repo.list_results(db, run_id, tenant_id=principal.tenant_id,
+                             limit=limit, offset=offset, status=status)
     return {"run_id": run_id, "count": len(rows), "results": [r.to_dict() for r in rows]}
 
 
 @app.get("/runs/{run_id}/metrics", response_model=RunMetrics)
-def get_metrics(run_id: str, db: Session = Depends(get_db)):
-    if repo.get_run(db, run_id) is None:
+def get_metrics(run_id: str, db: Session = Depends(get_db),
+                principal: Principal = Depends(current_principal)):
+    if repo.get_run(db, run_id, tenant_id=principal.tenant_id) is None:
         raise HTTPException(404, f"Run {run_id} not found")
-    return RunMetrics(**repo.run_metrics(db, run_id))
+    return RunMetrics(**repo.run_metrics(db, run_id, tenant_id=principal.tenant_id))
 
 
-@app.post("/runs/{run_id}/cancel", response_model=RunOut, dependencies=[Depends(require_auth)])
-def cancel_run(run_id: str, db: Session = Depends(get_db)):
-    run = repo.get_run(db, run_id)
+@app.post("/runs/{run_id}/cancel", response_model=RunOut)
+def cancel_run(run_id: str, db: Session = Depends(get_db),
+               principal: Principal = Depends(require_cancel)):
+    run = repo.get_run(db, run_id, tenant_id=principal.tenant_id)
     if run is None:
         raise HTTPException(404, f"Run {run_id} not found")
     if run.status in RunStatus.TERMINAL:

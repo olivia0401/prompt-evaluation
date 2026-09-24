@@ -23,6 +23,10 @@ from typing import Optional
 
 # Lazy heavy imports — keep import-time cheap.
 
+# Single source of truth for the offline embedding backend. Must match the id
+# passed to SentenceTransformer below AND the cache-key backend tag.
+FALLBACK_EMBED_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
 # ---------- Length rules (from prompts.txt) ----------
 
 LENGTH_RANGES = {
@@ -90,6 +94,15 @@ def _cosine(a, b) -> float:
     import numpy as np
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
+    if a.shape != b.shape:
+        # Two different embedding backends produced these vectors (e.g. OpenAI
+        # 3072-dim vs local mpnet 768-dim). A cosine across backends is
+        # meaningless, so fail loudly rather than let a numpy broadcast error
+        # get swallowed as a generic "scoring error" row.
+        raise ValueError(
+            f"embedding dimension mismatch: {a.shape} vs {b.shape} — the cache "
+            f"likely mixes backends. Delete outputs/embedding_cache.jsonl and re-score."
+        )
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     if denom == 0:
         return 0.0
@@ -336,6 +349,10 @@ class EmbeddingClient:
         self.use_fallback = use_fallback
         self._client = None
         self._fallback = None
+        # The model that ACTUALLY produced the vectors. self.model stays at the
+        # OpenAI id even when the local fallback is active, so it must never be
+        # used as the cache key on its own — see _cache_key.
+        self.backend_model = FALLBACK_EMBED_MODEL if use_fallback else self.model
 
         if cache_path is None:
             try:
@@ -396,6 +413,7 @@ class EmbeddingClient:
             "cache_file": str(self.cache_path),
             "model": self.model,
             "backend": "fallback" if self.use_fallback else "openai",
+            "backend_model": self.backend_model,
         }
 
     # ---- internal: OpenAI ----
@@ -421,7 +439,7 @@ class EmbeddingClient:
     def _ensure_fallback(self):
         if self._fallback is None:
             from sentence_transformers import SentenceTransformer
-            self._fallback = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+            self._fallback = SentenceTransformer(FALLBACK_EMBED_MODEL)
         return self._fallback
 
     def _embed_local(self, text: str) -> list[float]:
@@ -431,12 +449,19 @@ class EmbeddingClient:
     # ---- cache ----
 
     def _cache_key(self, text: str) -> str:
-        h = hashlib.sha256(f"{self.model}:{text}".encode("utf-8")).hexdigest()
+        # Key on the BACKEND model, not self.model. Keying on self.model let an
+        # offline run (local 768-dim mpnet) write vectors under the OpenAI
+        # model's key; a later run WITH a key then read those local vectors back
+        # as if they were OpenAI 3072-dim embeddings. Every cosine computed from
+        # that mix is silently wrong — the scores still look plausible.
+        h = hashlib.sha256(f"{self.backend_model}:{text}".encode("utf-8")).hexdigest()
         return h[:24]
 
     def _load_cache(self):
         if not self.cache_path.exists():
             return
+        loaded: dict[str, list[float]] = {}
+        legacy = 0
         try:
             with open(self.cache_path, encoding="utf-8") as f:
                 for line in f:
@@ -445,17 +470,38 @@ class EmbeddingClient:
                         continue
                     try:
                         entry = json.loads(line)
-                        self._cache[entry["k"]] = entry["v"]
+                        key, vec = entry["k"], entry["v"]
                     except (json.JSONDecodeError, KeyError):
                         continue
+                    entry_model = entry.get("m")
+                    if entry_model is None:
+                        legacy += 1          # written before backend tagging
+                    elif entry_model != self.backend_model:
+                        continue             # a different backend's vectors
+                    loaded[key] = vec
         except OSError:
-            pass
+            return
+
+        # Legacy untagged entries carry no backend provenance. If the loaded set
+        # holds more than one vector length, it is provably a mixed-backend cache
+        # and cannot be repaired — drop it (it is regenerable) rather than score
+        # against it. Costs one re-embed pass; the alternative is wrong numbers.
+        dims = {len(v) for v in loaded.values()}
+        if len(dims) > 1:
+            print(
+                f"[EmbeddingClient] {self.cache_path.name} mixes {sorted(dims)}-dim "
+                f"vectors from different backends ({legacy} untagged entries). "
+                f"Discarding the cache — it will be rebuilt on this run.",
+                file=sys.stderr,
+            )
+            return
+        self._cache = loaded
 
     def _append_to_cache_file(self, key: str, vec: list[float]):
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"k": key, "v": vec}) + "\n")
+                f.write(json.dumps({"k": key, "v": vec, "m": self.backend_model}) + "\n")
         except OSError:
             # Don't fail scoring just because cache write failed
             pass

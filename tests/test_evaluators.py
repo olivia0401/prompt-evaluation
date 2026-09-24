@@ -343,3 +343,65 @@ def test_length_ranges_cover_all_8_tasks():
         "feature_relevant", "context_relevant",
     }
     assert set(LENGTH_RANGES.keys()) == expected
+
+
+# --- embedding cache backend isolation -------------------------------------
+# Regression tests for a silent-corruption bug: the cache key was built from
+# self.model, which stays at the OpenAI model id even when the local fallback
+# backend is active. An offline run therefore wrote 768-dim local vectors under
+# the OpenAI model's key, and the next run WITH an API key read them straight
+# back as if they were 3072-dim OpenAI embeddings. Every cosine after that was
+# wrong, and every one of them looked perfectly plausible.
+
+def test_cache_key_is_scoped_to_the_backend_that_made_the_vector():
+    from src.evaluators import FALLBACK_EMBED_MODEL, EmbeddingClient
+
+    online = EmbeddingClient(api_key="sk-test", cache_path="does-not-exist.jsonl")
+    offline = EmbeddingClient(api_key=None, cache_path="does-not-exist.jsonl")
+
+    assert online.backend_model == online.model
+    assert offline.backend_model == FALLBACK_EMBED_MODEL
+    assert online._cache_key("hello") != offline._cache_key("hello")
+
+
+def test_offline_cache_entries_are_not_read_by_the_online_client(tmp_path):
+    import json
+
+    from src.evaluators import EmbeddingClient
+
+    cache = tmp_path / "embedding_cache.jsonl"
+    offline = EmbeddingClient(api_key=None, cache_path=cache)
+    offline._cache[offline._cache_key("hello")] = [0.1] * 768
+    offline._append_to_cache_file(offline._cache_key("hello"), [0.1] * 768)
+
+    entry = json.loads(cache.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["m"] == offline.backend_model      # provenance is written down
+
+    online = EmbeddingClient(api_key="sk-test", cache_path=cache)
+    assert online._cache_key("hello") not in online._cache
+
+
+def test_mixed_dimension_legacy_cache_is_discarded(tmp_path):
+    """Untagged entries of two different dimensions are provably poisoned."""
+    import json
+
+    from src.evaluators import EmbeddingClient
+
+    cache = tmp_path / "embedding_cache.jsonl"
+    lines = [
+        json.dumps({"k": "aaa", "v": [0.1] * 768}),
+        json.dumps({"k": "bbb", "v": [0.1] * 3072}),
+    ]
+    cache.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+
+    client = EmbeddingClient(api_key="sk-test", cache_path=cache)
+    assert client._cache == {}
+
+
+def test_cosine_refuses_to_compare_across_backends():
+    import pytest
+
+    from src.evaluators import _cosine
+
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        _cosine([0.1] * 768, [0.1] * 3072)

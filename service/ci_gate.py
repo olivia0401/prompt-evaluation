@@ -11,9 +11,24 @@ more than `tolerance`, or if the overall ok-rate falls below `min_ok_rate`.
     python -m service.ci_gate --update-baseline   # snapshot current as the new baseline
     python -m service.ci_gate --scored path.csv   # check a specific scored.csv
 
-Sentence tasks are gated on cosine; the keyword task on F1. Per-task metric is
-the best config's mean (max over config_id of the per-config mean) so the gate
-tracks the recipe you would actually ship, not the average of all recipes.
+Sentence tasks are gated on cosine; the keyword task on F1.
+
+Two properties this gate has to get right, both learned the hard way:
+
+1. **Pin the recipe.** The per-task metric is the mean of the config recorded in
+   the baseline — NOT `max` over every config. `max` over ~142 recipes is an
+   order statistic: it is biased upward and has far more run-to-run variance
+   than any single recipe's mean, and it can silently switch which recipe it is
+   describing between runs. You would be comparing recipe A's score today
+   against recipe B's score yesterday and calling the difference a regression.
+   `max` is used only when creating a fresh baseline, where picking the leader
+   is the point.
+
+2. **Never gate tighter than the noise.** The tolerance defaults to the
+   empirically measured 2-sigma rerun noise (cfg.NOISE_FLOOR_COSINE). The old
+   default of 0.02 was *below* that floor, so identical quality could trip the
+   gate purely from sampling noise — a red build that means nothing, which is
+   how teams learn to ignore the gate.
 """
 import argparse
 import json
@@ -23,14 +38,21 @@ from pathlib import Path
 from src import config as cfg
 
 BASELINE_PATH = Path(__file__).resolve().parent / "eval_baseline.json"
-DEFAULT_TOLERANCE = 0.02
+# Tie the release tolerance to the measured noise floor rather than a hand-picked
+# constant. If the floor is re-measured, the gate moves with it automatically.
+DEFAULT_TOLERANCE = float(getattr(cfg, "NOISE_FLOOR_COSINE", 0.036))
 DEFAULT_MIN_OK_RATE = 0.90
 
 OK_STATUSES = {"ok", "ok_length_violation"}
 
 
-def compute_metrics(scored_csv: Path) -> dict:
-    """Return {'tasks': {task: {'metric','value','n'}}, 'ok_rate': float, 'n': int}."""
+def compute_metrics(scored_csv: Path, pinned: dict | None = None) -> dict:
+    """Return {'tasks': {task: {...}}, 'ok_rate': float, 'n': int}.
+
+    ``pinned`` maps task -> config_id (normally read from the baseline). A task
+    with a pinned config is scored on THAT config only; tasks without one fall
+    back to the best config, which is what you want when writing a new baseline.
+    """
     import pandas as pd
 
     if not scored_csv.exists():
@@ -41,6 +63,7 @@ def compute_metrics(scored_csv: Path) -> dict:
     if df.empty:
         raise SystemExit(f"{scored_csv} is empty.")
 
+    pinned = pinned or {}
     tasks: dict[str, dict] = {}
     for task, g in df.groupby("task"):
         # Keyword task carries f1; sentence tasks carry cosine.
@@ -49,12 +72,31 @@ def compute_metrics(scored_csv: Path) -> dict:
         if sub.empty:
             continue
         per_config = sub.groupby("config_id")[metric].mean()
-        best = per_config.max()
+
+        want = pinned.get(str(task))
+        if want is not None and want in per_config.index:
+            config, value, pin_status = want, float(per_config[want]), "pinned"
+        elif want is not None:
+            # The baselined recipe is absent from this run. Comparing some other
+            # recipe against it would be meaningless, so surface it instead.
+            tasks[str(task)] = {
+                "metric": metric,
+                "value": None,
+                "config": want,
+                "pin_status": "missing",
+                "n": 0,
+            }
+            continue
+        else:
+            config, value, pin_status = str(per_config.idxmax()), float(per_config.max()), "best"
+
+        n = int(sub[sub["config_id"] == config][metric].notna().sum())
         tasks[str(task)] = {
             "metric": metric,
-            "value": round(float(best), 6),
-            "best_config": str(per_config.idxmax()),
-            "n": int(sub[metric].notna().sum()),
+            "value": round(value, 6),
+            "config": config,
+            "pin_status": pin_status,
+            "n": n,
         }
 
     ok_rate = None
@@ -76,7 +118,13 @@ def write_baseline(path: Path, metrics: dict, *, tolerance: float, min_ok_rate: 
         "tolerance": tolerance,
         "min_ok_rate": min_ok_rate,
         "ok_rate": metrics.get("ok_rate"),
-        "tasks": {t: {"metric": m["metric"], "value": m["value"]} for t, m in metrics["tasks"].items()},
+        # `config` and `n` are provenance, not decoration: without the config the
+        # next run cannot reproduce which recipe this number describes.
+        "tasks": {
+            t: {"metric": m["metric"], "value": m["value"],
+                "config": m.get("config"), "n": m.get("n")}
+            for t, m in metrics["tasks"].items()
+        },
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote baseline -> {path} ({len(payload['tasks'])} tasks)")
@@ -100,9 +148,10 @@ def check(metrics: dict, baseline: dict) -> tuple[bool, list[str]]:
             lines.append(f"{task:22s} {'-':7s} {'(new)':>9s} "
                          f"{(cur['value'] if cur else 0):>9.4f} {'—':>8s}  NEW")
             continue
-        if cur is None:
+        if cur is None or cur.get("value") is None:
+            why = "recipe gone" if cur else "task gone"
             lines.append(f"{task:22s} {base['metric']:7s} {base['value']:>9.4f} "
-                         f"{'MISSING':>9s} {'—':>8s}  FAIL (task gone)")
+                         f"{'MISSING':>9s} {'—':>8s}  FAIL ({why})")
             passed = False
             continue
         delta = cur["value"] - base["value"]
@@ -138,18 +187,26 @@ def main(argv=None) -> int:
                     help="Write current metrics as the new baseline and exit 0.")
     args = ap.parse_args(argv)
 
-    metrics = compute_metrics(args.scored)
+    # Load the baseline FIRST so its pinned recipes drive scoring. Scoring the
+    # run's own best recipe and then comparing it to a baseline built from a
+    # different recipe is the bug this ordering prevents.
+    baseline = load_baseline(args.baseline) if not args.update_baseline else {}
+    pinned = {
+        t: m["config"]
+        for t, m in (baseline.get("tasks") or {}).items()
+        if isinstance(m, dict) and m.get("config")
+    }
+    metrics = compute_metrics(args.scored, pinned=pinned)
 
     if args.update_baseline:
         write_baseline(args.baseline, metrics, tolerance=args.tolerance, min_ok_rate=args.min_ok_rate)
         return 0
 
-    baseline = load_baseline(args.baseline)
     if not baseline:
         print("No baseline found — nothing to regress against. "
               "Create one with `python -m service.ci_gate --update-baseline`.")
         for t, m in sorted(metrics["tasks"].items()):
-            print(f"  {t:22s} {m['metric']:7s} {m['value']:.4f}")
+            print(f"  {t:22s} {m['metric']:7s} {m['value']:.4f}  [{m.get('config')}]")
         return 0
 
     passed, lines = check(metrics, baseline)

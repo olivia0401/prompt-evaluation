@@ -32,7 +32,17 @@ def enqueue_run(run_id: str) -> str | None:
     Schedule a run. Returns the RQ job id, or None when executed inline.
 
     Falls back to inline execution if Redis is unavailable or INLINE_JOBS is set.
+    Does nothing at all when DISABLE_RUN_EXECUTION is set: the run stays QUEUED
+    and no provider is contacted. See settings.DISABLE_RUN_EXECUTION.
     """
+    if settings.DISABLE_RUN_EXECUTION:
+        with session_scope() as s:
+            run = s.get(Run, run_id)
+            if run is not None:
+                run.status = RunStatus.QUEUED
+                run.note = (run.note or "") + " [execution disabled]"
+        return None
+
     if settings.redis_available():
         try:
             job = _get_queue().enqueue(perform_run, run_id, job_id=f"run-{run_id}")

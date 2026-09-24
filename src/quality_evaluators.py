@@ -129,26 +129,69 @@ def score_source_quality(
     }
 
 
-def weighted_kappa(human: Sequence[int], judge: Sequence[int], max_score: int = 5) -> float:
-    """Cohen's linearly weighted kappa for ordinal judge calibration."""
+def weighted_kappa(
+    human: Sequence[int],
+    judge: Sequence[int],
+    max_score: int = 5,
+    weights: str = "linear",
+) -> float:
+    """Cohen's weighted kappa for ordinal judge calibration.
+
+    ``weights`` selects the disagreement penalty:
+
+    * ``"linear"``    — the penalty grows with the size of the gap (default).
+    * ``"quadratic"`` — the penalty grows with the SQUARE of the gap, so it is
+      far more forgiving of adjacent disagreements and reports a noticeably
+      higher number on the same data.
+
+    Neither is more correct in the abstract, but they are not interchangeable,
+    and a kappa quoted without its weighting scheme cannot be read. This is the
+    only kappa implementation in the codebase for exactly that reason: two
+    scripts must not report two different numbers under one name.
+
+    The category set is fixed at ``1..max_score`` rather than inferred from the
+    ratings observed. Weighted kappa is invariant to a *uniform* rescaling of
+    the labels, so inferring the set is harmless while the observed values are
+    evenly spaced — which is why the bug it causes survives casual testing. It
+    bites when a value in the MIDDLE of the range goes unused: raters who avoid
+    "3" leave {1, 2, 4, 5}, inferring re-indexes that to {1, 2, 3, 4}, and the
+    2-to-4 disagreement is scored as one step instead of two. Measured on a
+    {1, 2, 5} rating set, the inferred-category version reports linear kappa
+    0.205 where the true spacing gives 0.128.
+    """
     if len(human) != len(judge) or not human:
         raise ValueError("human and judge scores must be non-empty and equal length")
     if any(not 1 <= int(x) <= max_score for x in [*human, *judge]):
         raise ValueError(f"scores must be in 1..{max_score}")
+    if weights not in ("linear", "quadratic"):
+        raise ValueError("weights must be 'linear' or 'quadratic'")
+
     n = len(human)
-    observed = 0.0
-    h_counts = Counter(human)
-    j_counts = Counter(judge)
-    expected = 0.0
     denom = max_score - 1
-    for h, j in zip(human, judge):
-        observed += 1.0 - abs(h - j) / denom if denom else 1.0
-    for h in range(1, max_score + 1):
-        for j in range(1, max_score + 1):
-            weight = 1.0 - abs(h - j) / denom if denom else 1.0
-            expected += weight * (h_counts[h] / n) * (j_counts[j] / n)
+    power = 1 if weights == "linear" else 2
+
+    def agreement(a: int, b: int) -> float:
+        if not denom:
+            return 1.0
+        return 1.0 - (abs(a - b) / denom) ** power
+
+    h_counts = Counter(int(x) for x in human)
+    j_counts = Counter(int(x) for x in judge)
+    observed = sum(agreement(int(h), int(j)) for h, j in zip(human, judge))
+    expected = sum(
+        agreement(h, j) * (h_counts[h] / n) * (j_counts[j] / n)
+        for h in range(1, max_score + 1)
+        for j in range(1, max_score + 1)
+    )
     if isclose(1.0 - expected, 0.0):
-        return 1.0 if isclose(observed / n, 1.0) else 0.0
+        # Chance agreement is already total (one side used a single value for
+        # everything). Kappa is 0/0 here: undefined, not perfect. Returning 1.0
+        # would turn "this sample carries no information" into a headline score.
+        raise ValueError(
+            "kappa is undefined: expected agreement is 1.0, which means the "
+            "ratings have no variance to correct for. Collect ratings that "
+            "actually span the scale."
+        )
     return (observed / n - expected) / (1.0 - expected)
 
 

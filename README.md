@@ -1,5 +1,11 @@
 # Prompt Evaluation Framework
 
+**[METHODS.md](METHODS.md) maps every component here to what the rest of the
+field calls it** — which parts are a RAGAS / DeepEval / promptfoo equivalent,
+which parts those tools do not give you (measured noise floors, paired
+significance, sample-size floors), and one known statistical gap left open
+rather than hidden.
+
 Automated pipeline for comparing LLM prompt recipes and models on a fixed set of
 client briefs. One command per stage; every run is resume-safe, budget-capped,
 and audited against the raw data. The current run is a **paired experiment over
@@ -48,8 +54,9 @@ Each stage ends at a STOP gate that prints the deliverable URLs and the audit re
 - **Paired Wilcoxon signed-rank**: the real "is A better than B" test across the same
   briefs — a higher mean alone is never reported as a win.
 - **Leave-one-brief-out**: recomputes each task winner after dropping one brief at a time.
-- **Cohen's weighted κ**: AI-judge (Sonnet) vs human ratings; until ≥30 human ratings
-  are filled in, the AI judge is reference-only.
+- **Cohen's weighted κ**: AI-judge (Sonnet) vs human ratings, collected blind via
+  `scripts/rate_samples.py` and reported under both linear and quadratic
+  weighting with a bootstrap CI. Below 30 pairs no headline κ is printed at all.
 
 ## Deliverable workbook (4 tabs)
 
@@ -110,8 +117,20 @@ docker compose up --build
 ```
 
 `service/ci_gate.py` is the eval regression gate (blocks a release when a task's
-score drops below the committed baseline). Full details in
-[service/README.md](service/README.md).
+score drops below the committed baseline). Two things it deliberately does:
+
+- **Scores the recipe the baseline names**, not the run's current best. Taking
+  `max` over ~142 recipes is an order statistic — biased upward, noisier than
+  any single recipe, and liable to silently describe a different recipe each
+  run, so the "regression" it reports can be a recipe swap rather than a quality
+  drop. If the baselined recipe is missing from a run, that is a FAIL (the run
+  is unverifiable), not a pass on whatever else scored well.
+- **Never gates tighter than the measured noise.** The tolerance defaults to
+  `cfg.NOISE_FLOOR_COSINE` (the empirical 2σ rerun band), so identical quality
+  cannot trip the gate on sampling noise alone. A gate that cries wolf inside
+  its own noise band is one everybody learns to ignore.
+
+Full details in [service/README.md](service/README.md).
 
 ### Evidence-grounded quality gate
 
@@ -128,7 +147,49 @@ investigative or evidence-grounded outputs:
   configured quality floors.
 
 These metrics require explicit gold annotations; lexical similarity alone is
-not treated as proof that a claim is true. Example usage:
+not treated as proof that a claim is true.
+
+The golden set lives in **`data/golden/`** — the one thing under `data/` that is
+version-controlled, because unlike `outputs/` it is not regenerable. It holds
+**61 real items** exported from a shipped product (`parent-check`'s rule engine,
+which reports the exact signals behind each verdict), stratified across
+scam / benign / health outcomes:
+
+```bash
+cd ../parent-check && python export_eval_queue.py --output "../prompt test/data/golden/queue.jsonl"
+python -m scripts.annotate_golden --annotator <you>     # ~60-90 min
+python -m scripts.annotate_golden --agreement           # inter-annotator kappa
+python -m scripts.annotate_golden --build               # -> annotations.json
+```
+
+**16 of the 61 verdicts cite no signal at all** — measurable before annotation
+begins, and a 26% ceiling on citation completeness. Those are the informative
+items: a correct call the engine cannot justify and a lucky guess are
+indistinguishable from outside, and only annotation separates them.
+
+Three of the six gate metrics genuinely cannot be computed on this corpus. They
+are **declared** with a reason under `not_applicable` rather than omitted — the
+gate fails on an undeclared missing metric, and prints declared exclusions even
+on a PASS, so a green tick can never quietly cover less than the reader assumes.
+[`data/golden/README.md`](data/golden/README.md) has the full rationale and the
+honest limits of a set this size.
+
+Three properties the report and gate enforce:
+
+- **Rates are pooled, not averaged over examples.** A denominator-weighted
+  (micro) rate is what gets gated; the macro mean is reported alongside so a
+  large gap between them is visible rather than hidden. On the seed set the
+  macro entity-resolution F1 (0.917) passes the 0.90 floor and the pooled one
+  (0.884) does not — averaging incomparable fractions had been buying a pass.
+- **Judge kappa is computed once over pooled ratings.** Cohen's kappa is not an
+  average-able quantity: on a single agreeing pair it returns 1.0, because
+  expected agreement is also 1.0, so a mean of per-example kappas drifts upward
+  with every short example.
+- **Sample-size floors gate before threshold floors.** Metrics computed on 9
+  claims cannot clear a threshold meaningfully, so "not enough data to judge"
+  is reported as its own failure and never as a pass.
+
+Example usage:
 
 ```powershell
 python -m scripts.build_golden_manifest --root data/golden --output data/golden/manifest.json --version 2026.08.22
@@ -145,9 +206,45 @@ from the existing prompt-score gate: prompt quality, evidence grounding,
 entity resolution and judge calibration have different denominators and must
 not be collapsed into one misleading score.
 
-Browser smoke tests live under `e2e/` and run in Chromium, Firefox and WebKit.
-They use `E2E_BASE_URL` and optional `E2E_API_TOKEN`; credentials for real
-personas or tenant-isolation tests belong in staging secrets, never in git.
+### Multi-tenant service + browser suite
+
+The service is multi-tenant: an API key carries a **tenant** and a **role**
+(admin / operator / viewer), every query is filtered by tenant in the data layer
+rather than by a check each route has to remember, and a cross-tenant read
+returns **404 rather than 403** — a 403 confirms the row exists, which turns run
+ids into an enumeration oracle.
+
+`e2e/` drives six authenticated personas (two tenants x three roles) across
+Chromium, Firefox and WebKit — 87 tests, ~10 seconds, no setup:
+
+```bash
+cd e2e && npm ci && npx playwright install chromium firefox webkit
+npx playwright test
+```
+
+The suite POSTs real runs against a real server started with
+`DISABLE_RUN_EXECUTION=1`: the full API surface is live and no LLM provider is
+ever contacted, so it costs nothing and needs no provider keys. `retries` is 0
+even in CI — the one flake it has hit was fixed at the root (cold engine launch
+moved into `global-setup.ts`) rather than retried. `tests/test_tenancy.py` is
+the same 24 assertions without a browser, so a broken scope fails in seconds on
+every push. Details in [e2e/README.md](e2e/README.md).
+
+### Judge calibration
+
+```bash
+python -m scripts.rate_samples --rater <you>              # blinded, shuffled, resumable
+python -m scripts.rate_samples --rater <you> --pass 2 --sample 10   # intra-rater ceiling
+python -m scripts.compute_kappa                           # kappa + bootstrap CI
+```
+
+The judge's score and the automatic cosine are hidden while rating: an anchored
+human agreeing with the judge is not evidence that the judge is right. Kappa is
+reported under **both** linear and quadratic weighting because they can differ
+by 0.2 on the same ratings — enough to move a result across the 0.7 "trust the
+judge" line — and the decision is taken on the **lower bound of the bootstrap
+CI**, not the point estimate. Below 30 pairs it refuses to print a headline
+number at all.
 
 ## Tests
 

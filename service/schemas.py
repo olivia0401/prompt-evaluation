@@ -18,6 +18,8 @@ class RunCreate(BaseModel):
 
 class RunOut(BaseModel):
     id: str
+    tenant_id: str = "default"
+    created_by: Optional[str] = None
     stage: str
     status: str
     budget_usd: Optional[float] = None
@@ -54,6 +56,8 @@ class QualityReportIn(BaseModel):
 
 class QualityReportOut(BaseModel):
     id: str
+    tenant_id: str = "default"
+    created_by: Optional[str] = None
     dataset_version: str
     evaluator_version: str
     passed: bool

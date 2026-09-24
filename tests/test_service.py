@@ -65,9 +65,9 @@ class FakeClient:
         return cr
 
 
-def _new_run(stage="phase0", **kw):
+def _new_run(stage="phase0", tenant_id="default", **kw):
     with session_scope() as s:
-        run = repo.create_run(s, stage=stage, **kw)
+        run = repo.create_run(s, tenant_id=tenant_id, stage=stage, **kw)
         return run.id
 
 
@@ -77,9 +77,9 @@ def test_execute_run_records_results():
     assert out["status"] == RunStatus.SUCCEEDED
     assert out["call_count"] == 4
     with session_scope() as s:
-        rows = repo.list_results(s, run_id)
+        rows = repo.list_results(s, run_id, tenant_id="default")
         assert len(rows) == 4
-        m = repo.run_metrics(s, run_id)
+        m = repo.run_metrics(s, run_id, tenant_id="default")
         assert m["ok_rate"] == 1.0
         assert set(m["calls_by_model"]) == {"haiku", "gpt5mini"}
 
@@ -100,7 +100,7 @@ def test_resume_skips_completed():
     runner.execute_run(run_id, todo=fake_todo("phase0"), client=c2)
     assert c2.call_count == 0
     with session_scope() as s:
-        assert len(repo.list_results(s, run_id)) == 4
+        assert len(repo.list_results(s, run_id, tenant_id="default")) == 4
 
 
 def test_todo_build_failure_marks_failed():
@@ -205,6 +205,8 @@ def test_quality_report_api_stores_pass_and_fail(monkeypatch):
             "unsupported_claim_rate": 0.01, "entity_resolution_f1": 0.95,
             "judge_weighted_kappa": 0.75, "source_acceptable_rate": 0.95,
         },
+        "denominators": {"claims": 120, "mentions": 340, "sources": 95,
+                         "judge_ratings": 40},
         "provenance": {"evaluator_version": "test", "golden_manifest_sha256": "abc"},
     }
     client = TestClient(api.app)
@@ -218,3 +220,65 @@ def test_quality_report_api_stores_pass_and_fail(monkeypatch):
     assert response.status_code == 201
     assert response.json()["passed"] is False
     assert any("groundedness" in e for e in response.json()["errors"])
+
+
+def test_ci_gate_pins_the_baselined_recipe(tmp_path):
+    """The gate must score the recipe the baseline names, not the run's best.
+
+    Regression test for a gate that took `max` over every config: recipe A wins
+    today, recipe B wins tomorrow, and the gate silently compares two different
+    recipes' numbers and calls the gap a quality regression.
+    """
+    import pandas as pd
+
+    from service import ci_gate
+
+    scored = tmp_path / "scored.csv"
+    pd.DataFrame([
+        # The baselined recipe held steady at 0.80...
+        {"task": "t1", "config_id": "A:pinned", "model_key": "haiku", "status": "ok",
+         "cosine": 0.80, "f1": None},
+        # ...while an unrelated experimental recipe happens to score higher.
+        {"task": "t1", "config_id": "Z:experimental", "model_key": "haiku", "status": "ok",
+         "cosine": 0.95, "f1": None},
+    ]).to_csv(scored, index=False)
+
+    pinned = ci_gate.compute_metrics(scored, pinned={"t1": "A:pinned"})
+    assert pinned["tasks"]["t1"]["config"] == "A:pinned"
+    assert pinned["tasks"]["t1"]["value"] == 0.80
+    assert pinned["tasks"]["t1"]["pin_status"] == "pinned"
+
+    # With no pin (baseline creation) the leader is the right answer.
+    fresh = ci_gate.compute_metrics(scored)
+    assert fresh["tasks"]["t1"]["config"] == "Z:experimental"
+    assert fresh["tasks"]["t1"]["pin_status"] == "best"
+
+
+def test_ci_gate_fails_when_the_baselined_recipe_is_absent(tmp_path):
+    """A run that no longer contains the pinned recipe is unverifiable, not passing."""
+    import pandas as pd
+
+    from service import ci_gate
+
+    scored = tmp_path / "scored.csv"
+    pd.DataFrame([
+        {"task": "t1", "config_id": "Z:other", "model_key": "haiku", "status": "ok",
+         "cosine": 0.99, "f1": None},
+    ]).to_csv(scored, index=False)
+
+    metrics = ci_gate.compute_metrics(scored, pinned={"t1": "A:pinned"})
+    assert metrics["tasks"]["t1"]["pin_status"] == "missing"
+
+    baseline = {"tolerance": 0.036, "min_ok_rate": 0.9,
+                "tasks": {"t1": {"metric": "cosine", "value": 0.80, "config": "A:pinned"}}}
+    passed, lines = ci_gate.check(metrics, baseline)
+    assert passed is False
+    assert any("recipe gone" in line for line in lines)
+
+
+def test_ci_gate_tolerance_is_not_tighter_than_measured_noise():
+    """A gate that fires inside the noise band teaches everyone to ignore it."""
+    from src import config as cfg
+    from service import ci_gate
+
+    assert ci_gate.DEFAULT_TOLERANCE >= cfg.NOISE_FLOOR_COSINE

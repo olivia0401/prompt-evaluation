@@ -35,8 +35,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-service.txt
 
+      # `set -euo pipefail` + `bash -n` in the shell-lint step below: a gate
+      # whose own shell is broken is worse than no gate, because it fails for a
+      # reason that has nothing to do with quality.
       - name: Run eval gate
+        shell: bash
         run: |
+          set -euo pipefail
           SCORED="${{ github.event.inputs.scored_path || 'outputs/scored.csv' }}"
           if [ -f "$SCORED" ]; then
             python -m service.ci_gate --scored "$SCORED"
@@ -44,14 +49,16 @@ jobs:
             echo "No $SCORED present — skipping gate. Produce it with:"
             echo "  python -m scripts.analyze --score"
             echo "then re-run this workflow (or run it in your release pipeline)."
+          fi
 
       - name: Run evidence-grounded quality gate
+        shell: bash
         run: |
+          set -euo pipefail
           REPORT="${{ github.event.inputs.quality_report_path || 'outputs/quality_report.json' }}"
           if [ -f "$REPORT" ]; then
             python -m service.quality_gate "$REPORT"
           else
             echo "No $REPORT present — skipping evidence-grounded gate."
             echo "Produce a quality-report/v1 JSON after the annotated evaluation run."
-          fi
           fi

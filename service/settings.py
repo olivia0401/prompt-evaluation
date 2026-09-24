@@ -53,6 +53,23 @@ API_VERSION = "0.1.0"
 # service publicly, or anyone who can reach it could spend your LLM budget.
 API_TOKEN = os.getenv("API_TOKEN", "")
 
+# Multi-tenant principals as a JSON array; see service/auth.py.
+#   [{"key": "...", "name": "acme-admin", "tenant": "acme", "role": "admin"}]
+# Unset -> fall back to the single API_TOKEN; both unset -> open mode.
+SERVICE_PRINCIPALS = os.getenv("SERVICE_PRINCIPALS", "")
+
+# --- Safety ---------------------------------------------------------------
+# Kill switch for actually executing a submitted run. The API surface stays
+# fully live (runs are created, listed, scoped, cancelled) but nothing reaches
+# an LLM provider, so a run costs $0.
+#
+# This exists because the browser suite POSTs real runs against a real server.
+# Without it, `npx playwright test` would spend money on every execution, need
+# provider keys in CI, and — worse — mark runs FAILED when those keys are
+# absent, which would make the cancel tests fail for a reason that has nothing
+# to do with what they are testing.
+DISABLE_RUN_EXECUTION = os.getenv("DISABLE_RUN_EXECUTION", "").lower() in {"1", "true", "yes"}
+
 
 def redis_available() -> bool:
     """True if a Redis server answers a PING at REDIS_URL."""

@@ -36,17 +36,45 @@ from src.quality_evaluators import (
 
 
 def _average(rows: list[dict], key: str) -> float:
+    """Unweighted (macro) mean over examples — reported for visibility only."""
     values = [float(row[key]) for row in rows if key in row]
     if not values:
         raise ValueError(f"no values available for metric: {key}")
     return mean(values)
 
 
+def _pooled(rows: list[dict], key: str, weight_key: str) -> float:
+    """Denominator-weighted (micro) rate — the number the gate acts on.
+
+    A plain mean over examples silently gives an example with 1 claim the same
+    say as one with 40. For rates whose denominator varies per example, that is
+    not "the rate on this dataset", it is an average of incomparable fractions.
+    Both are reported; the gate uses this one.
+    """
+    num = den = 0.0
+    for row in rows:
+        if key not in row or weight_key not in row:
+            continue
+        w = float(row[weight_key])
+        num += float(row[key]) * w
+        den += w
+    if den == 0:
+        raise ValueError(f"no weighted values available for metric: {key}")
+    return num / den
+
+
 def build_report(payload: dict, manifest_path: Path, evaluator_version: str) -> dict:
     examples = payload.get("examples") or []
     if not examples:
         raise ValueError("input must contain at least one annotated example")
-    evidence_rows, entity_rows, source_rows, judge_rows = [], [], [], []
+    evidence_rows, entity_rows, source_rows = [], [], []
+    # Judge ratings are POOLED, never averaged per example. Cohen's kappa is a
+    # chance-corrected agreement statistic over a contingency table: it is not
+    # defined on 1-2 ratings (a single agreeing pair returns kappa=1.0 because
+    # expected agreement is also 1.0), and a mean of per-example kappas is not
+    # the kappa of the dataset. Collect every rating, compute one kappa.
+    judge_human: list[int] = []
+    judge_model: list[int] = []
     for example in examples:
         claims = [Claim(c["claim_id"], tuple(c.get("evidence_ids", [])), bool(c.get("factual", True)))
                   for c in example.get("claims", [])]
@@ -66,20 +94,70 @@ def build_report(payload: dict, manifest_path: Path, evaluator_version: str) -> 
             source_rows.append(score_source_quality(source["predicted"], source["gold"]))
         judge = example.get("judge")
         if judge:
-            judge_rows.append(calibrate_judge(judge["human"], judge["judge"]))
+            human, model = list(judge["human"]), list(judge["judge"])
+            if len(human) != len(model):
+                raise ValueError(
+                    f"example {example.get('id', '?')}: {len(human)} human ratings "
+                    f"vs {len(model)} judge ratings"
+                )
+            judge_human.extend(int(x) for x in human)
+            judge_model.extend(int(x) for x in model)
 
-    metrics = {
-        "groundedness": _average(evidence_rows, "groundedness"),
-        "citation_completeness": _average(evidence_rows, "citation_completeness"),
-        "unsupported_claim_rate": _average(evidence_rows, "unsupported_claim_rate"),
-        "entity_resolution_f1": _average(entity_rows, "f1"),
-        "source_acceptable_rate": _average(source_rows, "acceptable_rate"),
-        "judge_weighted_kappa": _average(judge_rows, "weighted_kappa"),
+    # A metric with no data is either an oversight or a decision. Declaring it
+    # in the payload's `not_applicable` map (with a reason) makes it a decision;
+    # leaving it silently absent makes the gate fail, which is the right default.
+    not_applicable = dict(payload.get("not_applicable") or {})
+    for name, reason in not_applicable.items():
+        if not str(reason).strip():
+            raise ValueError(
+                f"not_applicable['{name}'] has no reason. An exclusion without a "
+                f"stated reason is indistinguishable from an omission."
+            )
+
+    judge_stats = None
+    if judge_human:
+        judge_stats = calibrate_judge(judge_human, judge_model)
+    elif "judge_weighted_kappa" not in not_applicable:
+        raise ValueError(
+            "no judge/human ratings available for calibration. If this dataset "
+            "genuinely has no judge, declare it in not_applicable with a reason."
+        )
+
+    candidates = {
+        "groundedness": (evidence_rows, "groundedness", "claims"),
+        "citation_completeness": (evidence_rows, "citation_completeness", "claims"),
+        "unsupported_claim_rate": (evidence_rows, "unsupported_claim_rate", "claims"),
+        "entity_resolution_f1": (entity_rows, "f1", "mentions"),
+        "source_acceptable_rate": (source_rows, "acceptable_rate", "sources"),
+    }
+    metrics = {}
+    for name, (rows, key, weight) in candidates.items():
+        if name in not_applicable:
+            continue
+        metrics[name] = _pooled(rows, key, weight)
+    if judge_stats is not None:
+        metrics["judge_weighted_kappa"] = judge_stats["weighted_kappa"]
+    # Macro means kept alongside, never gated on: a large gap between macro and
+    # micro means the per-example denominators are lopsided, which is itself
+    # worth seeing before anyone quotes the headline number.
+    macro = {
+        name: _average(rows, key)
+        for name, (rows, key, _weight) in candidates.items()
+        if name not in not_applicable
     }
     return {
         "schema": "quality-report/v1",
         "dataset_version": payload.get("dataset_version", "unknown"),
         "metrics": metrics,
+        "macro_metrics": macro,
+        "not_applicable": not_applicable,
+        "denominators": {
+            "claims": int(sum(r["claims"] for r in evidence_rows)),
+            "mentions": int(sum(r["mentions"] for r in entity_rows)),
+            "sources": int(sum(r["sources"] for r in source_rows)),
+            "judge_ratings": len(judge_human),
+        },
+        "judge_calibration": judge_stats,
         "provenance": {
             "evaluator_version": evaluator_version,
             "golden_manifest_sha256": sha256_file(manifest_path),

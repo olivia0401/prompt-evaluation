@@ -1,4 +1,12 @@
-"""Thin data-access helpers over the ORM. All functions take an explicit session."""
+"""Thin data-access helpers over the ORM. All functions take an explicit session.
+
+Tenancy note: every function that reads or writes a tenant-owned row takes a
+required ``tenant_id``. It is a positional-ish keyword with no default on
+purpose — a default would let a new call site silently read across tenants, and
+that bug is invisible until it is a breach. ``get_run`` returns None for a run
+belonging to another tenant, so callers turn it into a 404 without a special
+case (a 403 would confirm the id exists).
+"""
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -7,8 +15,11 @@ from .models import CallResultRow, QualityReport, Run, RunStatus
 import json
 
 
-def create_run(session, *, stage, budget_usd=None, max_calls=None, concurrency=None, note=None) -> Run:
+def create_run(session, *, tenant_id, created_by=None, stage, budget_usd=None,
+               max_calls=None, concurrency=None, note=None) -> Run:
     run = Run(
+        tenant_id=tenant_id,
+        created_by=created_by,
         stage=stage,
         status=RunStatus.QUEUED,
         budget_usd=budget_usd,
@@ -21,20 +32,37 @@ def create_run(session, *, stage, budget_usd=None, max_calls=None, concurrency=N
     return run
 
 
-def get_run(session, run_id: str) -> Optional[Run]:
-    return session.get(Run, run_id)
+def get_run(session, run_id: str, *, tenant_id: str) -> Optional[Run]:
+    """None when the run does not exist OR belongs to another tenant.
+
+    Collapsing "missing" and "not yours" into one answer is deliberate: the
+    caller renders 404 either way, so run ids cannot be enumerated.
+    """
+    run = session.get(Run, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        return None
+    return run
 
 
-def list_runs(session, *, limit: int = 50, offset: int = 0, status: Optional[str] = None):
-    stmt = select(Run).order_by(Run.created_at.desc())
+def list_runs(session, *, tenant_id: str, limit: int = 50, offset: int = 0,
+              status: Optional[str] = None):
+    stmt = select(Run).where(Run.tenant_id == tenant_id).order_by(Run.created_at.desc())
     if status:
         stmt = stmt.where(Run.status == status)
     stmt = stmt.limit(limit).offset(offset)
     return list(session.execute(stmt).scalars())
 
 
-def list_results(session, run_id: str, *, limit: int = 500, offset: int = 0, status: Optional[str] = None):
-    stmt = select(CallResultRow).where(CallResultRow.run_id == run_id).order_by(CallResultRow.id)
+def list_results(session, run_id: str, *, tenant_id: str, limit: int = 500,
+                 offset: int = 0, status: Optional[str] = None):
+    # Join through the parent run rather than trusting run_id alone: call rows
+    # have no tenant column of their own, so their scope is their run's scope.
+    stmt = (
+        select(CallResultRow)
+        .join(Run, Run.id == CallResultRow.run_id)
+        .where(CallResultRow.run_id == run_id, Run.tenant_id == tenant_id)
+        .order_by(CallResultRow.id)
+    )
     if status:
         stmt = stmt.where(CallResultRow.status == status)
     stmt = stmt.limit(limit).offset(offset)
@@ -55,9 +83,9 @@ def done_keys_for_run(session, run_id: str) -> set:
     return set(session.execute(stmt).all())
 
 
-def run_metrics(session, run_id: str) -> dict:
+def run_metrics(session, run_id: str, *, tenant_id: str) -> dict:
     """Operational metrics computed straight from the stored call rows."""
-    run = session.get(Run, run_id)
+    run = get_run(session, run_id, tenant_id=tenant_id)
     if run is None:
         return {}
 
@@ -102,9 +130,12 @@ def run_metrics(session, run_id: str) -> dict:
     }
 
 
-def create_quality_report(session, report: dict, passed: bool) -> QualityReport:
+def create_quality_report(session, report: dict, passed: bool, *, tenant_id,
+                          created_by=None) -> QualityReport:
     provenance = report.get("provenance", {})
     row = QualityReport(
+        tenant_id=tenant_id,
+        created_by=created_by,
         dataset_version=str(report.get("dataset_version", "unknown")),
         evaluator_version=str(provenance.get("evaluator_version", "unknown")),
         passed=int(bool(passed)),
@@ -115,6 +146,8 @@ def create_quality_report(session, report: dict, passed: bool) -> QualityReport:
     return row
 
 
-def list_quality_reports(session, *, limit: int = 50, offset: int = 0):
-    stmt = select(QualityReport).order_by(QualityReport.created_at.desc())
+def list_quality_reports(session, *, tenant_id: str, limit: int = 50, offset: int = 0):
+    stmt = (select(QualityReport)
+            .where(QualityReport.tenant_id == tenant_id)
+            .order_by(QualityReport.created_at.desc()))
     return list(session.execute(stmt.limit(limit).offset(offset)).scalars())

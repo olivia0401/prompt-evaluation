@@ -20,7 +20,13 @@ Thumbs.db
 
 # Experiment artefacts (large + regenerable from the runner + analyze chain)
 outputs/
-data/
+data/*
+# ...but the golden evaluation set is the OPPOSITE of regenerable: it is the
+# fixed, hand-annotated reference the quality gate scores against, and it has to
+# be version-controlled or "reproducible and auditable" is just a claim.
+# data/golden/manifest.json fingerprints every file with SHA-256 so a report
+# cannot silently change its own evaluation set.
+!data/golden/
 
 # Build artefacts (xlsx, html, png — regenerable from build_* scripts)
 Results/
@@ -32,3 +38,8 @@ briefs.yml
 promptfoo-real/tests.yaml
 promptfoo-real/tests3.yaml
 promptfoo-real/results/
+
+# Browser suite: engines, node modules, traces and reports are all regenerable.
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
