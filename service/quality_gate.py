@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 
@@ -40,10 +41,19 @@ def check_report(report: dict, thresholds: dict | None = None) -> tuple[bool, li
     """Validate schema, provenance and configured quality thresholds."""
     limits = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     errors: list[str] = []
+    if not isinstance(report, dict):
+        return False, ["report must be an object"]
     required = ["schema", "dataset_version", "metrics", "provenance"]
     for field in required:
         if field not in report:
             errors.append(f"missing required field: {field}")
+    if errors:
+        return False, errors
+    for field in ("metrics", "provenance", "denominators", "not_applicable"):
+        if field in report and not isinstance(report[field], dict):
+            errors.append(f"{field} must be an object")
+    if not isinstance(report["dataset_version"], str) or not report["dataset_version"].strip():
+        errors.append("dataset_version must be a non-empty string")
     if errors:
         return False, errors
     if report["schema"] != "quality-report/v1":
@@ -58,7 +68,7 @@ def check_report(report: dict, thresholds: dict | None = None) -> tuple[bool, li
     # quietly went missing" — and the gate must never confuse the two.
     not_applicable = report.get("not_applicable") or {}
     for name, reason in not_applicable.items():
-        if not str(reason).strip():
+        if not isinstance(reason, str) or not reason.strip():
             errors.append(f"{name} declared not-applicable without a reason")
 
     # Sample-size floors before threshold checks: report which is which clearly,
@@ -81,7 +91,9 @@ def check_report(report: dict, thresholds: dict | None = None) -> tuple[bool, li
         actual = denominators.get(field)
         if actual is None:
             errors.append(f"missing denominator: {field} (cannot verify {threshold})")
-        elif int(actual) < int(limit):
+        elif isinstance(actual, bool) or not isinstance(actual, int) or actual < 0:
+            errors.append(f"invalid denominator: {field} must be a non-negative integer")
+        elif actual < limit:
             errors.append(
                 f"insufficient sample: {field}={actual} < {threshold}={limit} "
                 f"— metrics are not evidence at this size"
@@ -105,7 +117,13 @@ def check_report(report: dict, thresholds: dict | None = None) -> tuple[bool, li
                 f"reason if this dataset genuinely cannot produce it)"
             )
             continue
-        value = float(metrics[metric])
+        raw_value = metrics[metric]
+        lower = -1 if metric == "judge_weighted_kappa" else 0
+        if (isinstance(raw_value, bool) or not isinstance(raw_value, (int, float))
+                or not math.isfinite(raw_value) or not lower <= raw_value <= 1):
+            errors.append(f"invalid metric: {metric} must be finite and in [{lower}, 1]")
+            continue
+        value = float(raw_value)
         if not predicate(value, limits[threshold]):
             errors.append(f"{metric}={value:.4f} violates {threshold}={limits[threshold]:.4f}")
     return not errors, errors

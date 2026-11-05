@@ -1,4 +1,5 @@
 from service.quality_gate import check_report
+import pytest
 
 
 def _report(**metrics):
@@ -67,6 +68,27 @@ def test_quality_gate_requires_denominators():
     passed, errors = check_report(report)
     assert not passed
     assert any("missing denominator" in e for e in errors)
+
+
+@pytest.mark.parametrize("value", [None, [], "bad", float('inf'), float('nan'), True, 1.1, -0.1])
+def test_gate_rejects_invalid_metric_without_raising(value):
+    passed, errors = check_report(_report(groundedness=value))
+    assert not passed and any("groundedness" in error for error in errors)
+
+
+@pytest.mark.parametrize("value", [None, [], "30", 30.5, True, -1, float('inf')])
+def test_gate_rejects_invalid_sample_counts(value):
+    report = _report()
+    report['denominators']['claims'] = value
+    assert not check_report(report)[0]
+
+
+@pytest.mark.parametrize("field", ['metrics', 'provenance', 'denominators', 'not_applicable'])
+@pytest.mark.parametrize("value", [None, [], 3, "bad"])
+def test_gate_rejects_invalid_sections(field, value):
+    report = _report()
+    report[field] = value
+    assert not check_report(report)[0]
 
 
 def _golden_dir(tmp_path):

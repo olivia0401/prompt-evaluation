@@ -120,7 +120,11 @@ class PrincipalRegistry:
                 raise ValueError(f"SERVICE_PRINCIPALS is not valid JSON: {exc}") from exc
             if not isinstance(entries, list):
                 raise ValueError("SERVICE_PRINCIPALS must be a JSON array of objects")
+            if not entries:
+                raise ValueError("SERVICE_PRINCIPALS must contain at least one principal")
             for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("every principal must be an object")
                 key = str(entry.get("key") or "")
                 if not key:
                     raise ValueError("every principal needs a non-empty 'key'")

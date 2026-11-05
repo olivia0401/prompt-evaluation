@@ -97,6 +97,12 @@ def test_open_mode_only_when_nothing_is_configured():
     assert PrincipalRegistry.from_env(json.dumps(PERSONAS), None).open_mode is False
 
 
+@pytest.mark.parametrize('entries', [[], [None], ['not-an-object'], [42]])
+def test_explicit_invalid_registry_cannot_enable_anonymous_admin(entries):
+    with pytest.raises(ValueError):
+        PrincipalRegistry.from_env(json.dumps(entries), 'legacy-token')
+
+
 # ------------------------------------------------------------ authentication
 
 def test_health_is_public_and_everything_else_is_not(client):
