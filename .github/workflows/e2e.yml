@@ -1,10 +1,6 @@
 name: Browser suite
 
-# Tiered, so the cheap tier gates every push and the expensive tier does not.
-#
-#   tier 1  smoke     3 engines, seconds        every push
-#   tier 2  full      3 engines, 6 personas,    every push (it is only ~10s)
-#           + isolation
+# Install the browser engines once, with bounded setup and test times.
 #
 # The suite starts its own API on a fresh SQLite database (new checkout) with
 # DISABLE_RUN_EXECUTION=1, so it never contacts an LLM provider and needs no
@@ -15,10 +11,15 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: browser-suite-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  smoke:
-    name: Smoke (3 browsers)
+  test:
+    name: Browser suite (smoke + full)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,42 +34,27 @@ jobs:
       - name: Install service dependencies
         run: pip install -r requirements-service.txt
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
       - name: Install browser engines
         working-directory: e2e
+        timeout-minutes: 10
         run: |
           npm ci
           npx playwright install --with-deps chromium firefox webkit
 
       - name: Smoke tier
         working-directory: e2e
+        timeout-minutes: 5
         run: npx playwright test --grep @smoke
-
-  full:
-    name: Personas + isolation (3 browsers)
-    runs-on: ubuntu-latest
-    needs: smoke
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: e2e/package-lock.json
-
-      - name: Install service dependencies
-        run: pip install -r requirements-service.txt
-
-      - name: Install browser engines
-        working-directory: e2e
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium firefox webkit
 
       - name: Full suite
         working-directory: e2e
+        timeout-minutes: 10
         run: npx playwright test
 
       # Uploaded only on failure: a trace for a green run is noise, and a trace
