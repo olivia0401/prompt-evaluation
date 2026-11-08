@@ -54,7 +54,7 @@ services:
       API_TOKEN: ${API_TOKEN:-}
       SERVICE_PRINCIPALS: ${SERVICE_PRINCIPALS:-}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,7 +82,7 @@ services:
       API_BASE_URL: http://api:8000
       DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     depends_on:
       - api
 

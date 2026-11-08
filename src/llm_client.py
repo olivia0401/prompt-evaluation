@@ -142,6 +142,8 @@ class LLMClient:
         self._call_count = 0
         self._total_cost_usd = 0.0
         self._per_model_cost_usd: dict[str, float] = {}
+        self._reserved_cost_usd = 0.0
+        self._per_model_reserved_cost_usd: dict[str, float] = {}
         self._quota_exhausted = False
         # Lock for thread-safe counter / quota updates when run with concurrency.
         self._lock = threading.Lock()
@@ -175,6 +177,23 @@ class LLMClient:
         )
         kwargs.update(overrides)
         return cls(**kwargs)
+
+    @staticmethod
+    def _max_call_cost_usd(spec: dict, prompt: str) -> float:
+        """Conservative upper bound for reserving budget before a request.
+
+        UTF-8 byte count is an upper bound on input tokens for the provider
+        tokenizers used here. All configured models also have an explicit output
+        token limit. If a model lacks one, fail closed when a budget cap is set.
+        """
+        output_cap = spec["params"].get("max_completion_tokens", spec["params"].get("max_tokens"))
+        if output_cap is None:
+            return float("inf")
+        price = spec["price_per_1m"]
+        input_tokens_upper_bound = len(prompt.encode("utf-8"))
+        return (
+            input_tokens_upper_bound * price["input"] + output_cap * price["output"]
+        ) / 1_000_000
 
     # ---- public ----
 
@@ -211,7 +230,15 @@ class LLMClient:
             timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         )
 
-        # Kill switches — atomic read under lock
+        max_call_cost = (
+            self._max_call_cost_usd(spec, prompt)
+            if self.budget_cap_usd is not None or self.per_model_cap_usd is not None
+            else 0.0
+        )
+
+        # Kill switches and budget reservation are atomic. Without reserving
+        # before releasing the lock, concurrent calls can all pass the same
+        # remaining-budget check and spend past the cap before any result lands.
         with self._lock:
             if self._quota_exhausted:
                 result.status = Status.BUDGET_EXCEEDED
@@ -221,19 +248,30 @@ class LLMClient:
                 result.status = Status.BUDGET_EXCEEDED
                 result.error = f"call cap {self.call_cap} reached"
                 return result
-            if self.budget_cap_usd is not None and self._total_cost_usd >= self.budget_cap_usd:
-                result.status = Status.BUDGET_EXCEEDED
-                result.error = f"budget cap ${self.budget_cap_usd} reached"
-                return result
-            if self.per_model_cap_usd is not None:
-                spent = self._per_model_cost_usd.get(model_key, 0.0)
-                if spent >= self.per_model_cap_usd:
+            if self.budget_cap_usd is not None:
+                available_spend = self._total_cost_usd + self._reserved_cost_usd
+                if available_spend + max_call_cost > self.budget_cap_usd:
                     result.status = Status.BUDGET_EXCEEDED
                     result.error = (
-                        f"per-model cap ${self.per_model_cap_usd} reached "
-                        f"for {model_key} (spent ${spent:.4f})"
+                        f"budget cap ${self.budget_cap_usd} would be exceeded by "
+                        f"a call reserved at up to ${max_call_cost:.6f}"
                     )
                     return result
+            if self.per_model_cap_usd is not None:
+                spent = self._per_model_cost_usd.get(model_key, 0.0)
+                reserved = self._per_model_reserved_cost_usd.get(model_key, 0.0)
+                if spent + reserved + max_call_cost > self.per_model_cap_usd:
+                    result.status = Status.BUDGET_EXCEEDED
+                    result.error = (
+                        f"per-model cap ${self.per_model_cap_usd} would be exceeded "
+                        f"for {model_key} by a call reserved at up to ${max_call_cost:.6f}"
+                    )
+                    return result
+            self._call_count += 1
+            self._reserved_cost_usd += max_call_cost
+            self._per_model_reserved_cost_usd[model_key] = (
+                self._per_model_reserved_cost_usd.get(model_key, 0.0) + max_call_cost
+            )
 
         # Per-model in-flight gate. Threads block here so the worker pool
         # can be large while individual providers stay within RPM/TPM limits.
@@ -241,24 +279,28 @@ class LLMClient:
         sem = self._model_semaphores.get(model_key, self._default_semaphore)
 
         t0 = time.monotonic()
-        with sem:
-            try:
-                if spec["provider"] == "openai":
-                    self._call_openai(spec, prompt, result)
-                elif spec["provider"] == "anthropic":
-                    self._call_anthropic(spec, prompt, result)
-                else:
-                    raise ValueError(f"Unknown provider: {spec['provider']}")
-            except Exception as e:
-                self._classify_error(e, result)
-            finally:
-                result.latency_s = round(time.monotonic() - t0, 3)
-                with self._lock:
-                    self._call_count += 1
-                    self._total_cost_usd += result.cost_usd
-                    self._per_model_cost_usd[model_key] = (
-                        self._per_model_cost_usd.get(model_key, 0.0) + result.cost_usd
-                    )
+        try:
+            with sem:
+                try:
+                    if spec["provider"] == "openai":
+                        self._call_openai(spec, prompt, result)
+                    elif spec["provider"] == "anthropic":
+                        self._call_anthropic(spec, prompt, result)
+                    else:
+                        raise ValueError(f"Unknown provider: {spec['provider']}")
+                except Exception as e:
+                    self._classify_error(e, result)
+        finally:
+            result.latency_s = round(time.monotonic() - t0, 3)
+            with self._lock:
+                self._reserved_cost_usd -= max_call_cost
+                self._per_model_reserved_cost_usd[model_key] -= max_call_cost
+                if not self._per_model_reserved_cost_usd[model_key]:
+                    del self._per_model_reserved_cost_usd[model_key]
+                self._total_cost_usd += result.cost_usd
+                self._per_model_cost_usd[model_key] = (
+                    self._per_model_cost_usd.get(model_key, 0.0) + result.cost_usd
+                )
 
         # Optional Langfuse trace (no-op unless LANGFUSE_* env vars are set).
         try:
