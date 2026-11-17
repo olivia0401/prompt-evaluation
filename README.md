@@ -63,6 +63,16 @@ not independent client deployments or additive improvements.
   multiple-comparison correction (see `METHODS.md`). Treat any “best model” or
   “best recipe” claim as conditional on the evaluated sample and setup.
 
+### Verified test run snapshots
+
+- [Unit-test workflow, 2026-11-08](https://github.com/olivia0401/prompt-evaluation/actions/runs/42508682460): **282 passed, 10 skipped**.
+- [Browser workflow, 2026-11-08](https://github.com/olivia0401/prompt-evaluation/actions/runs/42508682277): **87 passed** across the configured Chromium, Firefox and WebKit browser projects.
+
+These are historical test-run results (after September 2026), not evidence that a
+specific employer commissioned the subsequent engineering, nor that a quality
+or security acceptance gate passed. Employment attribution and rights to the
+underlying briefs must be confirmed separately from repository test history.
+
 **Data sharing:** Publicly committed evaluation examples and annotations should
 be reviewed for authorisation and sensitive content before reuse. Do not commit
 real client briefs, credentials, or private source documents to this repository.
