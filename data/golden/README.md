@@ -1,5 +1,17 @@
 # Golden evaluation set
 
+## Relationship to the brand-brief benchmark
+
+This is a **separate 61-item evidence-annotation dataset** derived from the
+`parent-check` risk-rule evaluation. It is **not** the 23 client briefs used for
+brand-naming prompt and input-configuration experiments elsewhere in this
+repository. The name `golden` is a storage convention, not a claim that the
+currently single-annotator reference is adjudicated or production-grade.
+
+The evidence corpus and brand-brief dataset must have distinct provenance,
+denominators and quality claims. The detailed annotation limitations below
+remain applicable even when the pipeline code and unit tests pass.
+
 The fixed, hand-annotated reference the evidence-grounded quality gate scores
 against. Unlike `outputs/` this is **not** regenerable, so it is the one thing
 under `data/` that is version-controlled (see the `!data/golden/` rule in
